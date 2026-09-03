@@ -34,6 +34,9 @@ node_modules/
 # WorkBuddy 本地记忆与工作区数据
 .workbuddy/
 
+# 内部文档（架构说明 / 部署步骤 / 方案），不随代码同步到 GitHub
+docs/
+
 # 编辑器与系统
 .vscode/
 .idea/
