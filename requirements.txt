@@ -1,0 +1,16 @@
+# ops-center 运维中台 - Python 依赖
+fastapi>=0.110
+uvicorn[standard]>=0.27
+sqlalchemy>=2.0
+pymysql>=1.1
+cryptography>=42.0
+PyJWT>=2.8
+APScheduler>=3.10
+python-dotenv>=1.0
+PyYAML>=6.0
+requests>=2.31
+
+# 云厂商 SDK：阿里云（火山引擎走 OpenAPI 直签，无需 SDK）
+aliyun-python-sdk-core>=2.13
+aliyun-python-sdk-ecs>=4.24
+aliyun-python-sdk-rds>=2.7

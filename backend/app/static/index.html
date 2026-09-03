@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ops-center 运维中台</title>
+    <link rel="stylesheet" href="/static/vendor/element-plus.css">
+    <style>
+        :root {
+            --oc-bg: #f0f2f5;
+            --oc-sidebar: #1f2937;
+            --oc-sidebar-active: #2563eb;
+            --oc-header-h: 56px;
+        }
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            background: var(--oc-bg);
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        #app { height: 100%; }
+        [v-cloak] { display: none; }
+
+        /* ---------- 登录 ---------- */
+        .login-wrap {
+            height: 100%; display: flex; align-items: center; justify-content: center;
+            background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%);
+        }
+        .login-card { width: 400px; padding: 36px 32px; border-radius: 10px; background: #fff; }
+        .login-title { text-align: center; margin-bottom: 6px; font-size: 22px; font-weight: 600; color: #1f2937; }
+        .login-sub { text-align: center; margin-bottom: 26px; font-size: 13px; color: #909399; }
+
+        /* ---------- 布局 ---------- */
+        .oc-header {
+            height: var(--oc-header-h); background: #fff;
+            display: flex; align-items: center; padding: 0 18px;
+            box-shadow: 0 1px 4px rgba(0,21,41,.08); z-index: 10; position: relative;
+        }
+        .oc-logo { font-size: 17px; font-weight: 700; color: #1f2937; margin-right: 20px; white-space: nowrap; }
+        .oc-logo span { color: #2563eb; }
+        .oc-app-select { min-width: 260px; }
+        .oc-header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+        .oc-user { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #303133; font-size: 14px; }
+        .oc-body { display: flex; height: calc(100vh - var(--oc-header-h)); }
+        .oc-sidebar {
+            width: 190px; background: var(--oc-sidebar); overflow-y: auto; flex-shrink: 0;
+        }
+        .oc-menu-item {
+            padding: 13px 20px; color: #cbd5e1; cursor: pointer; font-size: 14px;
+            display: flex; align-items: center; gap: 10px; border-left: 3px solid transparent;
+            transition: all .15s;
+        }
+        .oc-menu-item:hover { background: rgba(255,255,255,.06); color: #fff; }
+        .oc-menu-item.active {
+            background: rgba(37,99,235,.18); color: #fff; border-left-color: var(--oc-sidebar-active);
+        }
+        .oc-menu-group { padding: 16px 20px 6px; font-size: 11px; color: #64748b; letter-spacing: 1px; }
+        .oc-main { flex: 1; overflow-y: auto; padding: 16px; }
+
+        /* ---------- 通用 ---------- */
+        .page-title { font-size: 18px; font-weight: 600; color: #1f2937; margin: 0 0 14px; }
+        .oc-card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+        .oc-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+        .oc-toolbar .el-form-item { margin-bottom: 0; }
+        .oc-spacer { flex: 1; }
+        .stat-card { text-align: center; }
+        .stat-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+        .stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
+        .text-muted { color: #909399; }
+        .text-success { color: #67c23a; }
+        .text-danger { color: #f56c6c; }
+        .text-warning { color: #e6a23c; }
+        .text-primary { color: #2563eb; }
+        .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+
+        /* 状态点 */
+        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .dot-running { background: #67c23a; }
+        .dot-stopped { background: #f56c6c; }
+        .dot-other { background: #909399; }
+
+        /* 任务详情 */
+        .item-msg { font-size: 12px; color: #606266; word-break: break-all; }
+    </style>
+</head>
+<body>
+<div id="app" v-cloak>
+    <!-- ============ 登录页 ============ -->
+    <div v-if="!isLogin" class="login-wrap">
+        <div class="login-card">
+            <div class="login-title">ops-center 运维中台</div>
+            <div class="login-sub">多云 ECS / RDS 统一纳管与开关机</div>
+            <el-form @submit.prevent="doLogin">
+                <el-form-item>
+                    <el-input v-model="loginForm.username" placeholder="用户名" size="large"
+                              prefix-icon="User" autocomplete="username" />
+                </el-form-item>
+                <el-form-item>
+                    <el-input v-model="loginForm.password" type="password" placeholder="密码" size="large"
+                              prefix-icon="Lock" autocomplete="current-password" show-password
+                              @keyup.enter="doLogin" />
+                </el-form-item>
+                <el-button type="primary" size="large" style="width:100%" :loading="loginLoading" @click="doLogin">
+                    登 录
+                </el-button>
+            </el-form>
+            <div style="margin-top:14px;text-align:center;font-size:12px;color:#c0c4cc">
+                初始账号 admin / Admin@12345（见 .env 配置）
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ 主界面 ============ -->
+    <div v-else style="height:100%">
+        <!-- 顶部栏 -->
+        <div class="oc-header">
+            <div class="oc-logo">ops<span>-center</span></div>
+
+            <!-- 全局应用切换下拉框 -->
+            <el-select v-model="currentAppId" filterable clearable placeholder="全部应用"
+                       class="oc-app-select" @change="onAppChange">
+                <el-option label="全部应用" :value="null" />
+                <el-option v-for="a in apps" :key="a.id" :label="a.name + '（' + a.stats.total + '）'" :value="a.id" />
+            </el-select>
+
+            <el-select v-model="currentEnv" clearable placeholder="全部环境" style="width:120px;margin-left:8px"
+                       @change="onEnvChange">
+                <el-option label="全部环境" value="" />
+                <el-option v-for="e in envs" :key="e" :label="e" :value="e" />
+            </el-select>
+
+            <!-- 运行中任务提示 -->
+            <el-tag v-if="runningCount > 0" type="warning" effect="dark" style="margin-left:12px;cursor:pointer"
+                    @click="go('tasks')">
+                <el-icon class="is-loading" style="margin-right:4px"><Loading /></el-icon>
+                {{ runningCount }} 个任务执行中
+            </el-tag>
+
+            <div class="oc-header-right">
+                <el-button size="small" :icon="Refresh" @click="syncAll" :loading="syncing">
+                    同步资源
+                </el-button>
+                <el-dropdown @command="onUserCommand">
+                    <div class="oc-user">
+                        <el-icon><UserFilled /></el-icon>
+                        <span>{{ me.username }}</span>
+                        <el-tag size="small" :type="roleTagType(me.role)">{{ roleLabel(me.role) }}</el-tag>
+                    </div>
+                    <template #dropdown>
+                        <el-dropdown-menu>
+                            <el-dropdown-item command="password">修改密码</el-dropdown-item>
+                            <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+                        </el-dropdown-menu>
+                    </template>
+                </el-dropdown>
+            </div>
+        </div>
+
+        <div class="oc-body">
+            <!-- 侧边栏 -->
+            <div class="oc-sidebar">
+                <template v-for="(group, gi) in menus" :key="gi">
+                    <div class="oc-menu-group">{{ group.title }}</div>
+                    <div v-for="m in group.items" :key="m.key"
+                         class="oc-menu-item" :class="{active: view === m.key}"
+                         @click="go(m.key)">
+                        <el-icon><component :is="m.icon" /></el-icon>
+                        <span>{{ m.label }}</span>
+                    </div>
+                </template>
+            </div>
+
+            <!-- 主内容区 -->
+            <div class="oc-main">
+                <component :is="viewComponent" :app-id="currentAppId" :env="currentEnv" :me="me"
+                           @go="go" @refresh-apps="loadApps" @task-created="pollRunning" />
+            </div>
+        </div>
+    </div>
+
+    <!-- 修改密码对话框 -->
+    <el-dialog v-model="pwdDialog" title="修改密码" width="420px">
+        <el-form :model="pwdForm" label-width="90px">
+            <el-form-item label="原密码"><el-input v-model="pwdForm.old" type="password" show-password /></el-form-item>
+            <el-form-item label="新密码"><el-input v-model="pwdForm.nw" type="password" show-password placeholder="至少 8 位" /></el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button @click="pwdDialog=false">取消</el-button>
+            <el-button type="primary" @click="doChangePwd">确定</el-button>
+        </template>
+    </el-dialog>
+</div>
+
+<script src="/static/vendor/vue.global.prod.js"></script>
+<script src="/static/vendor/element-plus.min.js"></script>
+<script src="/static/vendor/element-plus-icons.min.js"></script>
+<script src="/static/vendor/element-plus-zh-cn.js"></script>
+<script src="/static/vendor/axios.min.js"></script>
+<script src="/static/js/api.js"></script>
+<script src="/static/js/components.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
