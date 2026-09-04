@@ -34,6 +34,22 @@ PID_FILE="$RUN_DIR/$APP_NAME.pid"
 LOG_FILE="$LOG_DIR/$APP_NAME.log"
 ENV_FILE="$PROJECT_DIR/.env"
 
+# 载入 .env（若存在），使部署期配置（数据库密码、镜像加速器等）生效。
+# 设计优先级：命令行传入的环境变量 > .env > 脚本默认值。
+# 先暂存命令行/环境已有的覆盖项，source 之后恢复，确保命令行临时覆盖优先于 .env。
+_CLI_DOCKER_REGISTRY_MIRROR="${DOCKER_REGISTRY_MIRROR:-}"
+_CLI_MYSQL_IMAGE="${MYSQL_IMAGE:-}"
+_CLI_AUTO_INSTALL="${AUTO_INSTALL:-}"
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    . "$ENV_FILE"
+    set +a
+fi
+[ -n "$_CLI_DOCKER_REGISTRY_MIRROR" ] && DOCKER_REGISTRY_MIRROR="$_CLI_DOCKER_REGISTRY_MIRROR"
+[ -n "$_CLI_MYSQL_IMAGE" ] && MYSQL_IMAGE="$_CLI_MYSQL_IMAGE"
+[ -n "$_CLI_AUTO_INSTALL" ] && AUTO_INSTALL="$_CLI_AUTO_INSTALL"
+unset _CLI_DOCKER_REGISTRY_MIRROR _CLI_MYSQL_IMAGE _CLI_AUTO_INSTALL
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log_info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
@@ -55,6 +71,12 @@ PYTHON_BIN="${PYTHON_BIN:-}"
 PYTHON_SOURCE_VER="${PYTHON_SOURCE_VER:-3.12.14}"
 PYTHON_MIRROR="${PYTHON_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/python}"
 AUTO_INSTALL="${AUTO_INSTALL:-auto}"
+# MySQL 镜像：默认走国内代理（华为云 SWR 公开的 Docker Hub 同步，免登录），
+# 可用 MYSQL_IMAGE 覆盖；若设置了 DOCKER_REGISTRY_MIRROR（阿里云镜像加速器地址，
+# 形如 https://xxxx.mirror.aliyuncs.com），则自动写入 docker daemon 的 registry-mirrors
+# 并重启 docker，之后 mysql:8.0 直接经阿里云加速拉取（推荐国内阿里云用户使用）
+MYSQL_IMAGE="${MYSQL_IMAGE:-swr.cn-north-4.myhuaweicloud.com/ddn-k8s/mysql:8.0}"
+DOCKER_REGISTRY_MIRROR="${DOCKER_REGISTRY_MIRROR:-}"
 OS_TYPE=""; OS_ID=""; OS_VER=""; OS_LIKE=""; PKG_MANAGER=""
 
 version_ge() {  # version_ge 3.10 3.9 -> true
@@ -411,6 +433,50 @@ install_deps() {
 # -----------------------------------------------------------------------------
 # 数据库
 # -----------------------------------------------------------------------------
+apply_docker_mirror() {
+    # 将阿里云镜像加速器地址写入 docker daemon 的 registry-mirrors 并重启生效
+    local mirror="$DOCKER_REGISTRY_MIRROR"
+    [ -z "$mirror" ] && return 0
+    local f="/etc/docker/daemon.json"
+    log_step "配置 Docker 镜像加速器：$mirror"
+    local json="{}"
+    [ -f "$f" ] && json="$(as_root cat "$f" 2>/dev/null || echo '{}')"
+    local new
+    new="$(python3 - "$json" "$mirror" <<'PY' || true
+import sys, json
+raw = (sys.argv[1] or '').strip() or '{}'
+try:
+    d = json.loads(raw)
+except Exception:
+    d = {}
+if not isinstance(d, dict):
+    d = {}
+mirrors = d.get("registry-mirrors") or []
+m = sys.argv[2]
+if m not in mirrors:
+    mirrors.insert(0, m)
+d["registry-mirrors"] = mirrors
+print(json.dumps(d, indent=2, ensure_ascii=False))
+PY
+)"
+    if [ -z "$new" ]; then
+        log_warn "生成 daemon.json 失败，请手动在 $f 配置 registry-mirrors 后重试"
+        return 0
+    fi
+    local tmp="$(mktemp)"
+    printf '%s\n' "$new" > "$tmp"
+    as_root mkdir -p /etc/docker
+    as_root mv "$tmp" "$f"
+    local os_type; os_type="$(uname -s)"
+    if [ "$os_type" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
+        log_step "重启 docker 使镜像加速生效"
+        as_root systemctl restart docker
+        for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+    else
+        log_warn "请手动重启 Docker 使镜像加速生效（macOS: 重启 Docker Desktop；其他: 重启 docker 服务）"
+    fi
+}
+
 mysql_up() {
     if ! command -v docker >/dev/null 2>&1; then
         log_error "未检测到 docker，无法自动拉起 MySQL"
@@ -420,6 +486,10 @@ mysql_up() {
         log_error "Docker daemon 未运行，请先启动 Docker Desktop"
         exit 1
     fi
+    # 阿里云镜像加速器：写入 docker daemon 的 registry-mirrors 并重启
+    if [ -n "${DOCKER_REGISTRY_MIRROR:-}" ]; then
+        apply_docker_mirror
+    fi
     if docker ps -a --format '{{.Names}}' | grep -qx 'ops-center-mysql'; then
         log_info "MySQL 容器已存在，启动之"
         docker start ops-center-mysql >/dev/null
@@ -427,6 +497,18 @@ mysql_up() {
         log_step "创建 MySQL 8 容器 ops-center-mysql"
         as_root mkdir -p /data/mysql
         as_root chown -R 999:999 /data/mysql 2>/dev/null || true
+        # 镜像选择：设了阿里云镜像加速器则走 mysql:8.0（经 daemon mirror 加速），
+        # 否则用 MYSQL_IMAGE（默认华为云代理）；拉取失败回退 MYSQL_IMAGE
+        local img="$MYSQL_IMAGE"
+        [ -n "${DOCKER_REGISTRY_MIRROR:-}" ] && img="mysql:8.0"
+        if ! docker image inspect "$img" >/dev/null 2>&1; then
+            log_step "拉取 MySQL 镜像：$img"
+            if ! docker pull "$img" 2>/dev/null; then
+                log_warn "镜像拉取失败，回退：$MYSQL_IMAGE"
+                img="$MYSQL_IMAGE"
+                docker pull "$img" 2>/dev/null || { log_error "MySQL 镜像拉取失败，请检查网络或 DOCKER_REGISTRY_MIRROR"; exit 1; }
+            fi
+        fi
         docker run -d --name ops-center-mysql \
             -e MYSQL_ROOT_PASSWORD=rootpass123 \
             -e MYSQL_DATABASE=ops_center \
@@ -436,7 +518,7 @@ mysql_up() {
             -p 3306:3306 \
             -v /data/mysql:/var/lib/mysql \
             --restart unless-stopped \
-            mysql:8.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci >/dev/null
+            "$img" --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci >/dev/null
     fi
     log_info "等待 MySQL 就绪"
     for i in $(seq 1 60); do
