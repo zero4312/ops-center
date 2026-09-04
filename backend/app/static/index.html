@@ -119,14 +119,14 @@
             <!-- 全局应用切换下拉框 -->
             <el-select v-model="currentAppId" filterable clearable placeholder="全部应用"
                        class="oc-app-select" @change="onAppChange">
-                <el-option label="全部应用" :value="null" />
-                <el-option v-for="a in apps" :key="a.id" :label="a.name + '（' + a.stats.total + '）'" :value="a.id" />
+                <el-option label="全部应用" :value="null"></el-option>
+                <el-option v-for="a in apps" :key="a.id" :label="a.name + '（' + a.stats.total + '）'" :value="a.id"></el-option>
             </el-select>
 
             <el-select v-model="currentEnv" clearable placeholder="全部环境" style="width:120px;margin-left:8px"
                        @change="onEnvChange">
-                <el-option label="全部环境" value="" />
-                <el-option v-for="e in envs" :key="e" :label="e" :value="e" />
+                <el-option label="全部环境" value=""></el-option>
+                <el-option v-for="e in envs" :key="e" :label="e" :value="e"></el-option>
             </el-select>
 
             <!-- 运行中任务提示 -->
@@ -181,8 +181,8 @@
     <!-- 修改密码对话框 -->
     <el-dialog v-model="pwdDialog" title="修改密码" width="420px">
         <el-form :model="pwdForm" label-width="90px">
-            <el-form-item label="原密码"><el-input v-model="pwdForm.old" type="password" show-password /></el-form-item>
-            <el-form-item label="新密码"><el-input v-model="pwdForm.nw" type="password" show-password placeholder="至少 8 位" /></el-form-item>
+            <el-form-item label="原密码"><el-input v-model="pwdForm.old" type="password" show-password></el-input></el-form-item>
+            <el-form-item label="新密码"><el-input v-model="pwdForm.nw" type="password" show-password placeholder="至少 8 位"></el-input></el-form-item>
         </el-form>
         <template #footer>
             <el-button @click="pwdDialog=false">取消</el-button>

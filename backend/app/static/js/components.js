@@ -255,6 +255,11 @@
                         </template>
                     </el-table-column>
                     <el-table-column label="环境" prop="env" width="70" />
+                    <el-table-column label="实例规格" min-width="150" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span :title="row.engine_version ? '引擎版本：' + row.engine_version : ''">{{ row.spec || '-' }}</span>
+                        </template>
+                    </el-table-column>
                     <el-table-column label="CPU(核)" width="80">
                         <template #default="{ row }">{{ row.cpu != null ? row.cpu : '-' }}</template>
                     </el-table-column>

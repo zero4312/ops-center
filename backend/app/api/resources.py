@@ -42,6 +42,7 @@ def _resource_out(res: Resource) -> dict:
         "power_state": res.power_state,
         "env": res.env,
         "spec": res.spec,
+        "engine_version": res.engine_version,
         "cpu": res.cpu,
         "memory_gb": res.memory_gb,
         "charge_type": res.charge_type,

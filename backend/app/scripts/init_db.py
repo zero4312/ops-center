@@ -83,6 +83,7 @@ def main() -> int:
         "resources": [
             ("cpu", "ALTER TABLE resources ADD COLUMN cpu INT NULL"),
             ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
+            ("engine_version", "ALTER TABLE resources ADD COLUMN engine_version VARCHAR(64) NOT NULL DEFAULT ''"),
         ],
     }
     with engine.begin() as conn:

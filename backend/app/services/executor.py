@@ -300,6 +300,7 @@ def refresh_resource_status(db: Session, resource: Resource) -> bool:
                 resource.status = c.status
                 resource.charge_type = c.charge_type or resource.charge_type
                 resource.spec = c.spec or resource.spec
+                resource.engine_version = c.engine_version or resource.engine_version
                 resource.cpu = c.cpu if c.cpu is not None else resource.cpu
                 resource.memory_gb = c.memory_gb if c.memory_gb is not None else resource.memory_gb
                 resource.last_sync_at = _now()

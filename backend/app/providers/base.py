@@ -19,7 +19,8 @@ class CloudResource:
     status: str = "unknown"             # 云上原始状态，统一转小写
     region: str = ""
     zone: str = ""
-    spec: str = ""
+    spec: str = ""                      # 云厂商规格代码（ECS 实例型 / RDS 规格型）
+    engine_version: str = ""            # 引擎版本（RDS 专用，如 MySQL 8.0）
     cpu: int | None = None              # CPU 核数（由规格换算）
     memory_gb: int | None = None        # 内存 GB（由规格换算）
     charge_type: str = ""               # PostPaid(按量) | PrePaid(包年包月)
