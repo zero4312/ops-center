@@ -13,7 +13,7 @@
 #   ./deploy.sh status       查看运行状态
 #   ./deploy.sh logs         实时查看日志
 #   ./deploy.sh update       拉取代码 + 更新依赖 + 重启（升级用）
-#   ./deploy.sh mysql-up     用 Docker 快速起一个 MySQL（本机无数据库时用）
+#   ./deploy.sh mysql-up     用 Docker 快速起一个 MySQL（本机无数据库时用），并自动把连接串写入 .env
 #   ./deploy.sh db-init      仅初始化/升级数据库表结构
 #   ./deploy.sh reset-admin  重置管理员密码
 #   ./deploy.sh service      安装为系统服务（Linux: systemd / macOS: launchd）
@@ -508,6 +508,76 @@ PY
     fi
 }
 
+ensure_mysql_app_user() {
+    # 等待 MySQL 就绪，并幂等确保应用读写用户存在且具备目标库读写权限
+    # 参数：root密码 数据库名 应用用户名 应用密码
+    local root_pwd="$1" db="$2" app_user="$3" app_pwd="$4"
+    log_info "等待 MySQL 就绪"
+    local i ready=0
+    for i in $(seq 1 60); do
+        if docker exec ops-center-mysql mysqladmin ping -h 127.0.0.1 -uroot -p"$root_pwd" --silent >/dev/null 2>&1; then
+            ready=1; break
+        fi
+        sleep 2
+    done
+    if [ "$ready" -ne 1 ]; then
+        log_error "MySQL 启动超时，请检查容器日志：docker logs ops-center-mysql"
+        exit 1
+    fi
+    log_step "确保应用读写用户 $app_user 存在并授权 $db.*"
+    docker exec -i ops-center-mysql mysql -h 127.0.0.1 -uroot -p"$root_pwd" <<SQL
+CREATE USER IF NOT EXISTS '$app_user'@'%' IDENTIFIED BY '$app_pwd';
+CREATE USER IF NOT EXISTS '$app_user'@'localhost' IDENTIFIED BY '$app_pwd';
+GRANT ALL PRIVILEGES ON \`$db\`.* TO '$app_user'@'%';
+GRANT ALL PRIVILEGES ON \`$db\`.* TO '$app_user'@'localhost';
+FLUSH PRIVILEGES;
+SQL
+    log_info "读写用户 $app_user 已就绪（首次初始化由官方镜像自动创建，此处为幂等兜底）"
+}
+
+inject_mysql_env() {
+    # 将 Docker 拉起 MySQL 的「库 / 用户 / 密码」信息自动写入 .env，供后端读取（OPS_DATABASE_URL）
+    # 幂等：用标记块管理，重复执行无副作用；不覆盖用户已手动改到云上 RDS 的连接串
+    # 参数：应用用户名 应用密码 数据库名
+    local app_user="$1" app_pwd="$2" db="$3"
+    local db_url="mysql+pymysql://${app_user}:${app_pwd}@127.0.0.1:3306/${db}?charset=utf8mb4"
+
+    # 确保 .env 存在（不存在则从模板生成，与 setup_env_file 行为一致）
+    if [ ! -f "$ENV_FILE" ]; then
+        if [ -f "$PROJECT_DIR/.env.example" ]; then
+            cp "$PROJECT_DIR/.env.example" "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+            log_info "已自动生成 .env（来自 .env.example）"
+        else
+            log_warn "缺少 .env.example，跳过数据库信息注入（请手动设置 OPS_DATABASE_URL）"
+            return 0
+        fi
+    fi
+
+    # 若用户已把 OPS_DATABASE_URL 指向非本机地址（如云上 RDS），不打断其配置
+    local cur=""
+    cur="$(grep -E '^[[:space:]]*OPS_DATABASE_URL=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d ' ')"
+    if [ -n "$cur" ] && [[ "$cur" != *"127.0.0.1"* ]]; then
+        log_warn ".env 中 OPS_DATABASE_URL 已指向非本机数据库（$cur），保留不改；"
+        log_warn "  如需改用本机 Docker MySQL，请手动改回 127.0.0.1 后重跑 ./deploy.sh mysql-up"
+        return 0
+    fi
+
+    # 标记块：幂等写入 OPS_DATABASE_URL（先剔除旧的 ops-center mysql 段与游离的 OPS_DATABASE_URL 行）
+    local stripped; stripped="$(mktemp)"
+    grep -v -E '# >>> ops-center mysql|# <<< ops-center mysql|^[[:space:]]*OPS_DATABASE_URL=' "$ENV_FILE" > "$stripped" 2>/dev/null || true
+    cat >> "$stripped" <<EOF
+
+# >>> ops-center mysql
+# 由 ./deploy.sh mysql-up 自动写入（Docker 本地 MySQL）
+#   user=$app_user  db=$db  密码见连接串；root 密码在 deploy.sh 中定义
+OPS_DATABASE_URL="$db_url"
+# <<< ops-center mysql
+EOF
+    mv "$stripped" "$ENV_FILE"
+    log_info ".env 已写入本地 MySQL 连接串：OPS_DATABASE_URL=$db_url"
+}
+
 mysql_up() {
     if ! command -v docker >/dev/null 2>&1; then
         log_error "未检测到 docker，无法自动拉起 MySQL"
@@ -517,6 +587,11 @@ mysql_up() {
         log_error "Docker / Podman 未就绪，请先启动容器运行时（docker 需启动 daemon；podman rootless 需有活动 session）"
         exit 1
     fi
+    # 数据库凭据（须与 .env 中 OPS_DATABASE_URL 保持一致）
+    local MYSQL_ROOT_PWD="rootpass123"
+    local MYSQL_DB="ops_center"
+    local MYSQL_APP_USER="opscenter"
+    local MYSQL_APP_PWD="opscenter123"
     # 阿里云镜像加速器：写入镜像源配置（docker 写 daemon.json 并重启；podman 写 registries.conf 即时生效）
     if [ -n "${DOCKER_REGISTRY_MIRROR:-}" ]; then
         apply_docker_mirror
@@ -541,27 +616,21 @@ mysql_up() {
             fi
         fi
         docker run -d --name ops-center-mysql \
-            -e MYSQL_ROOT_PASSWORD=rootpass123 \
-            -e MYSQL_DATABASE=ops_center \
-            -e MYSQL_USER=opscenter \
-            -e MYSQL_PASSWORD=opscenter123 \
+            -e "MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PWD" \
+            -e "MYSQL_DATABASE=$MYSQL_DB" \
+            -e "MYSQL_USER=$MYSQL_APP_USER" \
+            -e "MYSQL_PASSWORD=$MYSQL_APP_PWD" \
             -e TZ=Asia/Shanghai \
             -p 3306:3306 \
             -v /data/mysql:/var/lib/mysql \
             --restart unless-stopped \
             "$img" --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci >/dev/null
     fi
-    log_info "等待 MySQL 就绪"
-    for i in $(seq 1 60); do
-        if docker exec ops-center-mysql mysqladmin ping -h 127.0.0.1 --silent 2>/dev/null; then
-            log_info "MySQL 已就绪 (127.0.0.1:3306, db=ops_center, user=opscenter)"
-            log_info "请确保 .env 中 OPS_DATABASE_URL=mysql+pymysql://opscenter:opscenter123@127.0.0.1:3306/ops_center?charset=utf8mb4"
-            return 0
-        fi
-        sleep 2
-    done
-    log_error "MySQL 启动超时，请检查容器日志：docker logs ops-center-mysql"
-    exit 1
+    # 等待就绪并确保读写用户存在（幂等兜底）
+    ensure_mysql_app_user "$MYSQL_ROOT_PWD" "$MYSQL_DB" "$MYSQL_APP_USER" "$MYSQL_APP_PWD"
+    # 自动把库 / 用户 / 密码信息写入 .env（后端经 OPS_DATABASE_URL 读取）
+    inject_mysql_env "$MYSQL_APP_USER" "$MYSQL_APP_PWD" "$MYSQL_DB"
+    log_info "MySQL 已就绪 (127.0.0.1:3306, db=$MYSQL_DB, user=$MYSQL_APP_USER)"
 }
 
 db_init() {
