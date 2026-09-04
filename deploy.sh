@@ -425,6 +425,8 @@ mysql_up() {
         docker start ops-center-mysql >/dev/null
     else
         log_step "创建 MySQL 8 容器 ops-center-mysql"
+        as_root mkdir -p /data/mysql
+        as_root chown -R 999:999 /data/mysql 2>/dev/null || true
         docker run -d --name ops-center-mysql \
             -e MYSQL_ROOT_PASSWORD=rootpass123 \
             -e MYSQL_DATABASE=ops_center \
@@ -432,6 +434,7 @@ mysql_up() {
             -e MYSQL_PASSWORD=opscenter123 \
             -e TZ=Asia/Shanghai \
             -p 3306:3306 \
+            -v /data/mysql:/var/lib/mysql \
             --restart unless-stopped \
             mysql:8.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci >/dev/null
     fi
