@@ -4,7 +4,7 @@
 # 同时适用于：开发本机（macOS / Linux）与云服务器（Linux）
 #
 # 常用命令：
-#   ./deploy.sh bootstrap    检测并自动安装基础环境（Python >= 3.9 / pip / venv / curl / git）
+#   ./deploy.sh bootstrap    检测并自动安装基础环境（Python >= 3.9 / 源码编译锁定 3.12.14 / pip / venv / curl / git）
 #   ./deploy.sh env-check    只检测基础环境，不做任何安装
 #   ./deploy.sh install      安装依赖 + 初始化数据库 + 创建管理员（首次部署）
 #   ./deploy.sh start        启动服务（后台常驻）
@@ -51,6 +51,9 @@ log_step()  { echo -e "${BLUE}[STEP]${NC} $*"; }
 # -----------------------------------------------------------------------------
 REQUIRED_PY="${REQUIRED_PY:-3.9}"
 PYTHON_BIN="${PYTHON_BIN:-}"
+# 源码编译兜底时锁定的 Python 版本与国内镜像（避免从 python.org 慢速/卡死下载）
+PYTHON_SOURCE_VER="${PYTHON_SOURCE_VER:-3.12.14}"
+PYTHON_MIRROR="${PYTHON_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/python}"
 AUTO_INSTALL="${AUTO_INSTALL:-auto}"
 OS_TYPE=""; OS_ID=""; OS_VER=""; OS_LIKE=""; PKG_MANAGER=""
 
@@ -149,13 +152,13 @@ install_python_apt() {
         return 0
     fi
     if [ "${OS_ID:-}" = "ubuntu" ] || [ "${OS_LIKE:-}" != "${OS_LIKE#*ubuntu*}" ]; then
-        log_step "仓库 Python 版本 ${cand:-未知} 低于 $REQUIRED_PY，改用 deadsnakes 安装 Python 3.11"
+        log_step "仓库 Python 版本 ${cand:-未知} 低于 $REQUIRED_PY，改用 deadsnakes 安装 Python 3.12"
         as_root apt-get install -y software-properties-common ca-certificates curl
         as_root add-apt-repository -y ppa:deadsnakes/ppa
         as_root apt-get update -y
-        as_root apt-get install -y python3.11 python3.11-venv python3.11-dev
-        as_root apt-get install -y python3.11-distutils || true
-        ensure_pip "$(command -v python3.11)"
+        as_root apt-get install -y python3.12 python3.12-venv python3.12-dev
+        as_root apt-get install -y python3.12-distutils || true
+        ensure_pip "$(command -v python3.12)"
         return 0
     fi
     log_warn "当前 Debian 系仓库 Python 版本为 ${cand:-未知}，低于 $REQUIRED_PY"
@@ -194,14 +197,14 @@ install_python_brew() {
             return 1
         fi
     fi
-    log_step "brew 安装 python@3.11"
-    brew install python@3.11
+    log_step "brew 安装 python@3.12"
+    brew install python@3.12
     find_python
 }
 
 install_python_from_source() {
-    local ver="${1:-3.11.9}" tmp jobs
-    if ! confirm "是否从源码编译安装 Python $ver（耗时约 5-15 分钟）？"; then
+    local ver="$PYTHON_SOURCE_VER" tmp jobs
+    if ! confirm "是否从源码编译安装 Python $ver（默认从国内镜像下载，耗时约 5-15 分钟）？"; then
         return 1
     fi
     log_step "安装编译依赖"
@@ -219,12 +222,26 @@ install_python_from_source() {
         *)       log_warn "未知包管理器 ${PKG_MANAGER:-无}，请自行确保 gcc/openssl 开发库已安装" ;;
     esac
     tmp="$(mktemp -d)"
-    log_step "下载 Python $ver 源码"
-    if ! curl -fsSL "https://www.python.org/ftp/python/$ver/Python-$ver.tgz" -o "$tmp/Python-$ver.tgz"; then
-        log_error "源码下载失败，请检查网络连通性（或手动下载至 $tmp 后重试）"
+    # 优先国内镜像，失败回退官方源；设置超时避免长时间卡死
+    local urls=(
+        "${PYTHON_MIRROR%/}/$ver/Python-$ver.tgz"
+        "https://www.python.org/ftp/python/$ver/Python-$ver.tgz"
+    )
+    local ok=0
+    for u in "${urls[@]}"; do
+        log_step "下载 Python $ver 源码：$u"
+        if curl -fsSL --connect-timeout 20 --max-time 600 "$u" -o "$tmp/Python-$ver.tgz"; then
+            ok=1
+            break
+        fi
+        log_warn "下载失败，尝试下一个源"
+    done
+    if [ "$ok" -ne 1 ]; then
+        rm -rf "$tmp"
+        log_error "源码下载失败，请检查网络连通性（或手动下载 Python-$ver.tgz 到 $tmp 后重试）"
         return 1
     fi
-    tar -xzf "$tmp/Python-$ver.tgz" -C "$tmp" || return 1
+    tar -xzf "$tmp/Python-$ver.tgz" -C "$tmp" || { rm -rf "$tmp"; return 1; }
     jobs="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
     log_step "编译安装到 /usr/local（make -j$jobs）"
     ( cd "$tmp/Python-$ver" \
@@ -289,12 +306,12 @@ manual_python_hint() {
     cat <<EOF
 ${YELLOW}请手动安装 Python >= ${REQUIRED_PY} 后重试：${NC}
   Ubuntu/Debian : sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip python3-dev
-  Ubuntu 20.04  : sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+  Ubuntu 20.04  : sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
   RHEL/Rocky 8+ : sudo dnf module enable -y python39 && sudo dnf install -y python39 python39-devel python39-pip
   CentOS 7      : 仓库版本过低，建议源码编译或升级至 Rocky / Alma 8+
   Alpine        : apk add --no-cache python3 py3-pip python3-dev
-  macOS         : brew install python@3.11
-  通用源码安装  : https://www.python.org/downloads/
+  macOS         : brew install python@3.12
+  通用源码安装  : https://mirrors.tuna.tsinghua.edu.cn/python/  (或 https://www.python.org/downloads/)
 EOF
 }
 
