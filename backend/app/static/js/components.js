@@ -84,6 +84,25 @@
                 </el-col>
             </el-row>
 
+            <div class="oc-card" style="padding:14px 16px">
+                <h3 style="margin:0 0 12px;font-size:15px">
+                    运行中资源
+                    <el-tag size="small" type="success" style="margin-left:8px">{{ runningRows.length }}</el-tag>
+                </h3>
+                <el-table :data="runningRows" v-loading="runningLoading" border size="small" stripe
+                          max-height="420" empty-text="当前没有运行中的资源">
+                    <el-table-column label="云账号" prop="account_name" min-width="150" show-overflow-tooltip />
+                    <el-table-column label="实例名称" min-width="240" show-overflow-tooltip>
+                        <template #default="{ row }">{{ row.resource_name || row.resource_id }}</template>
+                    </el-table-column>
+                    <el-table-column label="运行中" width="100">
+                        <template #default>
+                            <span><span class="dot dot-running"></span>运行中</span>
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </div>
+
             <el-row :gutter="14" style="margin-top:4px">
                 <el-col :span="8">
                     <div class="oc-card">
@@ -125,7 +144,11 @@
             </el-row>
         </div>`,
         data() {
-            return { summary: { by_type: {}, stop_saving_count: 0, total: 0 }, apps: [], tasks: [], taskStatusMeta };
+            return {
+                summary: { by_type: {}, stop_saving_count: 0, total: 0 },
+                apps: [], tasks: [], taskStatusMeta,
+                runningRows: [], runningLoading: false
+            };
         },
         computed: {
             runningTotal() { return this.sumTotals('running'); },
@@ -144,6 +167,10 @@
                 api.summary({ app_id: this.appId }).then(r => { this.summary = r; });
                 api.listApps().then(r => { this.apps = r.items.filter(a => a.stats.total > 0); });
                 api.listTasks({ limit: 20 }).then(r => { this.tasks = r.items; });
+                this.runningLoading = true;
+                api.listResources({ app_id: this.appId, power_state: 'running', page: 1, page_size: 500 })
+                    .then(r => { this.runningRows = r.items; })
+                    .finally(() => { this.runningLoading = false; });
             }
         },
         watch: {
@@ -183,13 +210,16 @@
                     开机 ({{ selected.length }})
                 </el-button>
                 <el-button type="danger" :icon="VideoPause" :disabled="!selected.length" @click="operate('stop')">
-                    关机 ({{ selected.length }})
+                    节省关机 ({{ selected.length }})
+                </el-button>
+                <el-button type="primary" plain icon="Connection" :disabled="!selected.length" @click="openBatchBind">
+                    关联应用 ({{ selected.length }})
                 </el-button>
                 <el-dropdown v-if="appId" split-button type="primary" @command="operateApp" @click="operateApp('stop')">
-                    本应用关机
+                    本应用节省关机
                     <template #dropdown>
                         <el-dropdown-menu>
-                            <el-dropdown-item command="stop">应用整体关机</el-dropdown-item>
+                            <el-dropdown-item command="stop">应用整体节省关机</el-dropdown-item>
                             <el-dropdown-item command="start">应用整体开机</el-dropdown-item>
                         </el-dropdown-menu>
                     </template>
@@ -209,10 +239,7 @@
                             <el-tag size="small" :type="row.resource_type === 'ECS' ? 'primary' : 'success'">{{ row.resource_type }}</el-tag>
                         </template>
                     </el-table-column>
-                    <el-table-column label="厂商" width="90">
-                        <template #default="{ row }">{{ row.provider_label }}</template>
-                    </el-table-column>
-                    <el-table-column label="云账号" prop="account_name" width="130" show-overflow-tooltip />
+                    <el-table-column label="云账号" prop="account_name" width="150" show-overflow-tooltip />
                     <el-table-column label="应用" width="140">
                         <template #default="{ row }">
                             <span :style="{ color: row.app_id ? '#303133' : '#c0c4cc' }">
@@ -228,7 +255,17 @@
                         </template>
                     </el-table-column>
                     <el-table-column label="环境" prop="env" width="70" />
-                    <el-table-column label="规格" prop="spec" width="140" show-overflow-tooltip />
+                    <el-table-column label="实例规格" min-width="150" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span :title="row.engine_version ? '引擎版本：' + row.engine_version : ''">{{ row.spec || '-' }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="CPU(核)" width="80">
+                        <template #default="{ row }">{{ row.cpu != null ? row.cpu : '-' }}</template>
+                    </el-table-column>
+                    <el-table-column label="内存(GB)" width="80">
+                        <template #default="{ row }">{{ row.memory_gb != null ? row.memory_gb : '-' }}</template>
+                    </el-table-column>
                     <el-table-column label="计费" width="90">
                         <template #default="{ row }">{{ row.charge_label || '-' }}</template>
                     </el-table-column>
@@ -249,10 +286,10 @@
                                        @change="v => toggleManaged(row, v)" />
                         </template>
                     </el-table-column>
-                    <el-table-column label="操作" width="140" fixed="right">
+                    <el-table-column label="操作" width="180" fixed="right">
                         <template #default="{ row }">
                             <el-button link type="success" size="small" @click="operateOne('start', row)">开机</el-button>
-                            <el-button link type="danger" size="small" @click="operateOne('stop', row)">关机</el-button>
+                            <el-button link type="danger" size="small" @click="operateOne('stop', row)">节省关机</el-button>
                             <el-button link type="primary" size="small" @click="openBind(row)">归属</el-button>
                         </template>
                     </el-table-column>
@@ -265,18 +302,49 @@
                                :current-page="q.page" @current-change="p => { q.page = p; load(); }" />
             </div>
 
-            <!-- 归属绑定对话框 -->
-            <el-dialog v-model="bindDialog" title="资源归属应用" width="460px">
+            <!-- 归属绑定对话框（单个 / 批量，支持新建应用） -->
+            <el-dialog v-model="bindDialog" :title="bindMode === 'batch' ? '批量关联应用' : '资源归属应用'" width="500px">
                 <p style="margin:0 0 12px;font-size:13px;color:#606266">
-                    资源：<b>{{ bindRow.resource_name }}</b>（{{ bindRow.resource_id }}）
+                    <template v-if="bindMode === 'batch'">
+                        已选 <b>{{ selected.length }}</b> 个资源：
+                        <span class="text-muted" style="font-size:12px">{{ selected.slice(0, 3).map(r => r.resource_name).join('、') }}{{ selected.length > 3 ? ' 等' : '' }}</span>
+                    </template>
+                    <template v-else>
+                        资源：<b>{{ bindRow.resource_name }}</b>（{{ bindRow.resource_id }}）<br>
+                        <span style="color:#909399">当前归属：{{ bindRow.app_name }}{{ bindRow.is_manual ? '（手工）' : '' }}</span>
+                    </template>
                 </p>
-                <p style="font-size:13px;color:#909399;margin:0 0 12px">当前归属：{{ bindRow.app_name }}</p>
-                <el-select v-model="bindAppId" filterable clearable placeholder="选择应用（清空=恢复自动解析）" style="width:100%">
-                    <el-option v-for="a in apps" :key="a.id" :label="a.name" :value="a.id" />
-                </el-select>
+
+                <el-form label-width="80px">
+                    <el-form-item label="目标应用">
+                        <el-select v-model="bindAppId" filterable clearable
+                                   :disabled="bindCreateNew"
+                                   placeholder="选择应用（清空=恢复自动解析）" style="width:100%">
+                            <el-option v-for="a in apps" :key="a.id" :label="a.name" :value="a.id" />
+                        </el-select>
+                    </el-form-item>
+                    <el-form-item>
+                        <el-checkbox v-model="bindCreateNew">新建应用并关联</el-checkbox>
+                    </el-form-item>
+                    <template v-if="bindCreateNew">
+                        <el-form-item label="应用名称" required>
+                            <el-input v-model="bindNewApp.name" placeholder="如 APC-DEMO" maxlength="128" />
+                        </el-form-item>
+                        <el-form-item label="应用编码" required>
+                            <el-input v-model="bindNewApp.code" placeholder="如 DEMO（唯一）" maxlength="128" />
+                        </el-form-item>
+                        <el-form-item label="负责人">
+                            <el-input v-model="bindNewApp.owner" placeholder="选填" maxlength="64" />
+                        </el-form-item>
+                    </template>
+                </el-form>
+
+                <el-alert v-if="!bindCreateNew" type="info" :closable="false" show-icon
+                          title="手工关联优先于按实例名自动解析；清空选择可恢复自动解析。" />
+
                 <template #footer>
                     <el-button @click="bindDialog = false">取消</el-button>
-                    <el-button type="primary" @click="doBind">确定</el-button>
+                    <el-button type="primary" :loading="bindLoading" @click="doBind">确定</el-button>
                 </template>
             </el-dialog>
         </div>`,
@@ -285,7 +353,9 @@
                 rows: [], total: 0, loading: false, refreshing: false,
                 accounts: [], apps: [], selected: [],
                 q: { resource_type: '', power_state: '', account_id: '', keyword: '', page: 1, page_size: 50 },
-                bindDialog: false, bindRow: {}, bindAppId: null,
+                bindDialog: false, bindMode: 'row', bindRow: {}, bindAppId: null,
+                bindCreateNew: false, bindLoading: false,
+                bindNewApp: { name: '', code: '', owner: '' },
                 powerStateMeta
             };
         },
@@ -323,21 +393,53 @@
                 });
             },
             openBind(row) {
+                this.bindMode = 'row';
                 this.bindRow = row;
                 this.bindAppId = row.app_id;
+                this.bindCreateNew = false;
+                this.bindNewApp = { name: '', code: '', owner: '' };
+                this.bindDialog = true;
+            },
+            openBatchBind() {
+                if (!this.selected.length) return;
+                this.bindMode = 'batch';
+                this.bindAppId = null;
+                this.bindCreateNew = false;
+                this.bindNewApp = { name: '', code: '', owner: '' };
                 this.bindDialog = true;
             },
             doBind() {
-                api.updateResource(this.bindRow.id, { app_id: this.bindAppId }).then(() => {
-                    this.$message.success('已更新归属');
+                const ids = this.bindMode === 'batch'
+                    ? this.selected.map(r => r.id) : [this.bindRow.id];
+                if (!ids.length) return;
+                this.bindLoading = true;
+
+                let p;
+                if (this.bindCreateNew) {
+                    const { name, code, owner } = this.bindNewApp;
+                    if (!name || !code) {
+                        this.$message.warning('请填写新应用的名称与编码');
+                        this.bindLoading = false;
+                        return;
+                    }
+                    p = api.createApp({ name, code, owner }).then(r => (
+                        api.batchAssign({ resource_ids: ids, app_id: r.id })
+                    ));
+                } else {
+                    p = api.batchAssign({ resource_ids: ids, app_id: this.bindAppId || null });
+                }
+
+                p.then(r => {
+                    this.$message.success(r.message || '已更新归属');
                     this.bindDialog = false;
+                    this.selected = [];
                     this.load();
                     this.$emit('refresh-apps');
-                });
+                }).finally(() => { this.bindLoading = false; });
             },
             confirmOperate(action, label) {
                 return new Promise(resolve => {
-                    this.$confirm(`确定对「${label}」执行【${action === 'start' ? '开机' : '关机'}】吗？`, '操作确认', {
+                    this.$confirm(`确定对「${label}」执行【${action === 'start' ? '开机' : '节省关机'}】吗？节省关机将回收计算资源以降低费用，开机可能因库存不足失败。`, '操作确认', {
                         type: 'warning', confirmButtonText: '确定', cancelButtonText: '取消'
                     }).then(() => resolve(true)).catch(() => resolve(false));
                 });
@@ -400,14 +502,14 @@
                 </el-select>
                 <el-select v-model="q.action" clearable placeholder="动作" style="width:110px" @change="load">
                     <el-option label="开机" value="start" />
-                    <el-option label="关机" value="stop" />
+                    <el-option label="节省关机" value="stop" />
                 </el-select>
                 <el-button :icon="Refresh" @click="load">刷新</el-button>
             </div>
             <div class="oc-card" style="padding:8px 0">
                 <el-table :data="rows" v-loading="loading" border size="small" stripe>
                     <el-table-column label="ID" prop="id" width="70" />
-                    <el-table-column label="动作" width="80">
+                    <el-table-column label="动作" width="90">
                         <template #default="{ row }">
                             <el-tag size="small" :type="row.action === 'start' ? 'success' : 'danger'">{{ row.action_label }}</el-tag>
                         </template>
@@ -526,7 +628,7 @@
             <div class="oc-card" style="padding:8px 0">
                 <el-table :data="rows" v-loading="loading" border size="small" stripe>
                     <el-table-column label="策略名称" prop="name" min-width="160" show-overflow-tooltip />
-                    <el-table-column label="动作" width="80">
+                    <el-table-column label="动作" width="90">
                         <template #default="{ row }">
                             <el-tag size="small" :type="row.action === 'start' ? 'success' : 'danger'">{{ row.action_label }}</el-tag>
                         </template>
@@ -594,7 +696,7 @@
                     <el-form-item label="动作">
                         <el-radio-group v-model="form.action">
                             <el-radio-button value="start">开机</el-radio-button>
-                            <el-radio-button value="stop">关机</el-radio-button>
+                            <el-radio-button value="stop">节省关机</el-radio-button>
                         </el-radio-group>
                     </el-form-item>
                     <el-form-item label="作用范围">

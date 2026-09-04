@@ -22,6 +22,12 @@ class ResourceUpdate(BaseModel):
     remark: str | None = None
 
 
+class BatchAssign(BaseModel):
+    """批量设置资源归属应用（app_id 为空 = 取消手工绑定，恢复自动解析）。"""
+    resource_ids: list[int]
+    app_id: int | None = None
+
+
 def _resource_out(res: Resource) -> dict:
     return {
         "id": res.id,
@@ -36,6 +42,9 @@ def _resource_out(res: Resource) -> dict:
         "power_state": res.power_state,
         "env": res.env,
         "spec": res.spec,
+        "engine_version": res.engine_version,
+        "cpu": res.cpu,
+        "memory_gb": res.memory_gb,
         "charge_type": res.charge_type,
         "charge_label": {"PostPaid": "按量", "PrePaid": "包年包月"}.get(res.charge_type, res.charge_type),
         "private_ip": res.private_ip,
@@ -212,6 +221,38 @@ def update_resource(resource_id: int, body: ResourceUpdate, request: Request,
     write_audit(db, user.username, "update_resource", res.resource_name,
                 body.model_dump_json(exclude_unset=True), client_ip(request))
     return _resource_out(res)
+
+
+@router.post("/batch-assign")
+def batch_assign(body: BatchAssign, request: Request,
+                db: Session = Depends(get_db), user=Depends(require_operator)):
+    """批量设置资源归属应用：app_id 传值=手工绑定，传空=恢复按名称自动解析。"""
+    if not body.resource_ids:
+        raise HTTPException(400, "resource_ids 不能为空")
+
+    app = None
+    if body.app_id is not None:
+        app = db.get(Application, body.app_id)
+        if app is None:
+            raise HTTPException(404, "应用不存在")
+
+    rows = db.scalars(select(Resource).where(Resource.id.in_(body.resource_ids))).all()
+
+    n = 0
+    for res in rows:
+        if app is not None:
+            res.manual_app_id = app.id
+            res.effective_app_id = app.id
+        else:
+            res.manual_app_id = None
+            res.effective_app_id = res.auto_app_id
+        n += 1
+    db.commit()
+
+    action = f"绑定到 {app.name}" if app is not None else "恢复自动解析"
+    write_audit(db, user.username, "batch_assign", app.name if app else "(自动解析)",
+                f"{n} 个资源{action}", client_ip(request))
+    return {"message": f"已将 {n} 个资源{action}", "count": n}
 
 
 @router.get("/environments")

@@ -9,12 +9,13 @@ import datetime
 import hashlib
 import hmac
 import json
+import re
 from typing import Any
 from urllib.parse import quote
 
 import requests
 
-from .base import BaseProvider, CloudResource, ProviderError
+from .base import BaseProvider, CloudResource, ProviderError, mib_to_gb
 
 TIMEOUT = 30
 PAGE_SIZE = 100
@@ -141,7 +142,9 @@ class VolcengineProvider(BaseProvider):
                     status=(it.get("Status") or "unknown").lower(),
                     region=self.region,
                     zone=it.get("ZoneId", ""),
-                    spec=it.get("InstanceType", ""),
+                    spec=it.get("InstanceTypeId") or it.get("InstanceType") or "",
+                    cpu=self._to_int(it.get("Cpus") if it.get("Cpus") is not None else it.get("Cpu")),
+                    memory_gb=mib_to_gb(it.get("MemorySize")),
                     charge_type=self._norm_charge(it.get("InstanceChargeType", "")),
                     private_ip=self._extract_ip(it),
                     vpc_id=vpc,
@@ -165,6 +168,7 @@ class VolcengineProvider(BaseProvider):
                     continue
                 engine = db.get("Engine", "")
                 ver = db.get("EngineVersion", "")
+                cpu, mem_gb = self._parse_rds_specs(db)
                 out.append(CloudResource(
                     resource_id=db.get("InstanceId", ""),
                     resource_name=db.get("InstanceName") or db.get("InstanceId", ""),
@@ -172,7 +176,10 @@ class VolcengineProvider(BaseProvider):
                     status=(db.get("InstanceStatus") or "unknown").lower(),
                     region=self.region,
                     zone=db.get("ZoneId") or db.get("Zone", ""),
-                    spec=f"{engine} {ver}".strip() or (db.get("NodeSpec") or ""),
+                    spec=db.get("NodeSpec") or db.get("DBInstanceClass", ""),
+                    engine_version=f"{engine} {ver}".strip(),
+                    cpu=cpu,
+                    memory_gb=mem_gb,
                     charge_type=self._norm_charge(db.get("ChargeType", "")),
                     private_ip=self._extract_endpoint(db),
                     vpc_id=vpc,
@@ -192,7 +199,7 @@ class VolcengineProvider(BaseProvider):
                 ((result.get("ResponseMetadata") or {}).get("RequestId")) or "")
 
     def stop_ecs(self, instance_id: str, force: bool = False,
-                 stopped_mode: str = "KeepCharging") -> str:
+                 stopped_mode: str = "StopCharging") -> str:
         payload: dict[str, Any] = {"InstanceId": instance_id, "StoppedMode": stopped_mode}
         if force:
             payload["ForceStop"] = True
@@ -215,6 +222,38 @@ class VolcengineProvider(BaseProvider):
     # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
+    _NODE_SPEC_RE = re.compile(r"(\d+)c(\d+)g(?:\.|$)", re.IGNORECASE)
+
+    @classmethod
+    def _parse_rds_specs(cls, db: dict) -> tuple[int | None, int | None]:
+        """从 RDS 实例数据换算 CPU 核数与内存 GB。
+
+        优先解析 NodeSpec（如 rds.mysql.1c2g -> 1 核 2GB）；
+        其次读取 vCPU / Memory 直出字段（Memory 单位按 GB/MB 自适应）。
+        """
+        node_spec = str(db.get("NodeSpec") or "")
+        m = cls._NODE_SPEC_RE.search(node_spec)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+
+        cpu = db.get("VCpu") or db.get("Vcpu") or db.get("Cpu")
+        mem = db.get("Memory") or db.get("MemorySize")
+        cpu = cls._to_int(cpu)
+        mem = cls._to_int(mem)
+        if mem is not None and mem >= 1024:      # 数值过大按 MB 处理
+            mem = max(1, round(mem / 1024))
+        return cpu, mem
+
+    @staticmethod
+    def _to_int(v) -> int | None:
+        """宽容地把云 API 返回值转为 int，失败返回 None。"""
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
     @staticmethod
     def _norm_charge(raw: str) -> str:
         low = (raw or "").lower()

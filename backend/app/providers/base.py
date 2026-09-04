@@ -19,7 +19,10 @@ class CloudResource:
     status: str = "unknown"             # 云上原始状态，统一转小写
     region: str = ""
     zone: str = ""
-    spec: str = ""
+    spec: str = ""                      # 云厂商规格代码（ECS 实例型 / RDS 规格型）
+    engine_version: str = ""            # 引擎版本（RDS 专用，如 MySQL 8.0）
+    cpu: int | None = None              # CPU 核数（由规格换算）
+    memory_gb: int | None = None        # 内存 GB（由规格换算）
     charge_type: str = ""               # PostPaid(按量) | PrePaid(包年包月)
     private_ip: str = ""
     vpc_id: str = ""
@@ -27,6 +30,19 @@ class CloudResource:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def mib_to_gb(mib) -> int | None:
+    """云 API 的内存普遍以 MiB 返回，换算为整数 GB（不足 1G 按 1G 计）。"""
+    if mib is None:
+        return None
+    try:
+        mib = int(mib)
+    except (TypeError, ValueError):
+        return None
+    if mib <= 0:
+        return None
+    return max(1, round(mib / 1024))
 
 
 class ProviderError(Exception):
@@ -69,12 +85,12 @@ class BaseProvider(abc.ABC):
 
     @abc.abstractmethod
     def stop_ecs(self, instance_id: str, force: bool = False,
-                 stopped_mode: str = "KeepCharging") -> str:
+                 stopped_mode: str = "StopCharging") -> str:
         """停止 ECS，返回 request_id。
 
         stopped_mode:
-          KeepCharging 普通停机（保留实例与库存，随时可开，费用照收）
           StopCharging 节省停机（回收计算资源，省钱，但开机可能因库存不足失败）
+          KeepCharging 普通停机（保留实例与库存，随时可开，费用照收）
         """
 
     @abc.abstractmethod

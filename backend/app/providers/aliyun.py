@@ -13,7 +13,7 @@ from aliyunsdkecs.request.v20140526 import StartInstancesRequest, StopInstancesR
 from aliyunsdkrds.request.v20140815 import DescribeDBInstancesRequest
 from aliyunsdkrds.request.v20140815 import StartDBInstanceRequest, StopDBInstanceRequest
 
-from .base import BaseProvider, CloudResource, ProviderError
+from .base import BaseProvider, CloudResource, ProviderError, mib_to_gb
 
 PAGE_SIZE = 100
 
@@ -87,6 +87,8 @@ class AliyunProvider(BaseProvider):
                     region=self.region,
                     zone=it.get("ZoneId", ""),
                     spec=it.get("InstanceType", ""),
+                    cpu=self._to_int(it.get("Cpu")),
+                    memory_gb=mib_to_gb(it.get("Memory")),
                     charge_type=self._norm_charge(it.get("InstanceChargeType", "")),
                     private_ip=self._extract_private_ip(it),
                     vpc_id=vpc,
@@ -121,7 +123,9 @@ class AliyunProvider(BaseProvider):
                     status=(db.get("DBInstanceStatus") or "unknown").lower(),
                     region=self.region,
                     zone=db.get("ZoneId", ""),
-                    spec=f"{engine} {ver}".strip() or db.get("DBInstanceClass", ""),
+                    spec=db.get("DBInstanceClass", ""),
+                    engine_version=f"{engine} {ver}".strip(),
+                    memory_gb=mib_to_gb(db.get("DBInstanceMemory")),
                     charge_type=self._norm_charge(db.get("PayType", "")),
                     private_ip=db.get("ConnectionString", "") or "",
                     vpc_id=vpc,
@@ -143,7 +147,7 @@ class AliyunProvider(BaseProvider):
         return self._pick_request_id(data, instance_id)
 
     def stop_ecs(self, instance_id: str, force: bool = False,
-                 stopped_mode: str = "KeepCharging") -> str:
+                 stopped_mode: str = "StopCharging") -> str:
         req = StopInstancesRequest.StopInstancesRequest()
         req.set_InstanceIds([instance_id])
         req.set_StoppedMode(stopped_mode)
@@ -167,6 +171,16 @@ class AliyunProvider(BaseProvider):
     # ------------------------------------------------------------------
     # 工具
     # ------------------------------------------------------------------
+    @staticmethod
+    def _to_int(v) -> int | None:
+        """宽容地把云 API 返回值转为 int，失败返回 None。"""
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
     @staticmethod
     def _norm_charge(raw: str) -> str:
         low = (raw or "").lower()

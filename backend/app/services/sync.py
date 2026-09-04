@@ -110,6 +110,9 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
         res.status = cr.status
         res.env = parsed.env
         res.spec = cr.spec
+        res.engine_version = cr.engine_version
+        res.cpu = cr.cpu
+        res.memory_gb = cr.memory_gb
         res.charge_type = cr.charge_type
         res.private_ip = cr.private_ip
         res.vpc_id = cr.vpc_id
