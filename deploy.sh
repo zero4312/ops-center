@@ -434,9 +434,40 @@ install_deps() {
 # 数据库
 # -----------------------------------------------------------------------------
 apply_docker_mirror() {
-    # 将阿里云镜像加速器地址写入 docker daemon 的 registry-mirrors 并重启生效
+    # 将阿里云镜像加速器地址写入容器运行时的镜像源配置
+    #   - docker-ce : 写 /etc/docker/daemon.json 的 registry-mirrors，需重启 docker
+    #   - podman    : 写 /etc/containers/registries.conf 的 [[registry.mirror]]，即时生效，无需重启
     local mirror="$DOCKER_REGISTRY_MIRROR"
     [ -z "$mirror" ] && return 0
+    # 去掉协议头，registries.conf 用纯主机名更稳
+    local host="${mirror#*://}"
+    host="${host%/}"
+
+    # 识别运行时：docker 命令是否为 podman 别名
+    if docker --version 2>/dev/null | grep -qi podman; then
+        # ---------------- Podman ----------------
+        local f="/etc/containers/registries.conf"
+        log_step "配置 Podman 镜像加速器：$mirror (写入 $f)"
+        as_root mkdir -p "$(dirname "$f")"
+        # 幂等：先删除旧的 ops-center 段
+        local stripped; stripped="$(mktemp)"
+        as_root bash -c "awk 'BEGIN{s=0} /# >>> ops-center mirror/{s=1;next} /# <<< ops-center mirror/{s=0;next} !s{print}' $f > $stripped 2>/dev/null || true"
+        as_root mv "$stripped" "$f"
+        # 追加新段（即时生效，无需重启）
+        as_root bash -c "cat >> $f" <<EOF
+
+# >>> ops-center mirror
+[[registry]]
+location = "docker.io"
+[[registry.mirror]]
+location = "$host"
+# <<< ops-center mirror
+EOF
+        log_info "Podman 环境：镜像加速器已写入 $f，配置即时生效，无需重启"
+        return 0
+    fi
+
+    # ---------------- Docker CE ----------------
     local f="/etc/docker/daemon.json"
     log_step "配置 Docker 镜像加速器：$mirror"
     local json="{}"
@@ -483,10 +514,10 @@ mysql_up() {
         exit 1
     fi
     if ! docker info >/dev/null 2>&1; then
-        log_error "Docker daemon 未运行，请先启动 Docker Desktop"
+        log_error "Docker / Podman 未就绪，请先启动容器运行时（docker 需启动 daemon；podman rootless 需有活动 session）"
         exit 1
     fi
-    # 阿里云镜像加速器：写入 docker daemon 的 registry-mirrors 并重启
+    # 阿里云镜像加速器：写入镜像源配置（docker 写 daemon.json 并重启；podman 写 registries.conf 即时生效）
     if [ -n "${DOCKER_REGISTRY_MIRROR:-}" ]; then
         apply_docker_mirror
     fi
