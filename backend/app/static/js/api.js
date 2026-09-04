@@ -66,6 +66,7 @@
         refreshResource: id => http.post('/resources/' + id + '/refresh'),
         refreshStatus: ids => http.post('/resources/refresh-status', { ids: ids || [] }),
         updateResource: (id, d) => http.put('/resources/' + id, d),
+        batchAssign: d => http.post('/resources/batch-assign', d),
 
         // ---- 开关机 ----
         execute: d => http.post('/operations/execute', d),

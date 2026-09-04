@@ -73,7 +73,7 @@ def execute(body: OperateIn, request: Request,
         ordered=body.ordered,
     )
 
-    action_cn = "开机" if body.action == "start" else "关机"
+    action_cn = "开机" if body.action == "start" else "节省关机"
     target = f"应用#{body.app_id}" if body.app_id else f"{len(resources)} 个资源"
     write_audit(db, user.username, body.action, target,
                 f"{action_cn} {len(resources)} 个资源", client_ip(request))
@@ -86,7 +86,7 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
     data = {
         "id": task.id,
         "action": task.action,
-        "action_label": "开机" if task.action == "start" else "关机",
+        "action_label": "开机" if task.action == "start" else "节省关机",
         "scope": task.scope,
         "trigger": task.trigger,
         "operator": task.operator,

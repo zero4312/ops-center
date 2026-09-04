@@ -78,7 +78,7 @@ def _policy_out(db: Session, p: SchedulePolicy) -> dict:
         "id": p.id,
         "name": p.name,
         "action": p.action,
-        "action_label": "开机" if p.action == "start" else "关机",
+        "action_label": "开机" if p.action == "start" else "节省关机",
         "scope": p.scope,
         "target_app_id": p.target_app_id,
         "target_resource_ids": p.target_resource_ids,

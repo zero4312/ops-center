@@ -154,6 +154,8 @@ class Resource(Base):
     status: Mapped[str] = mapped_column(String(32), default="unknown", comment="running | stopped | ...")
     env: Mapped[str] = mapped_column(String(32), default="", comment="STG | DEV | ...")
     spec: Mapped[str] = mapped_column(String(128), default="", comment="实例规格 / 引擎版本")
+    cpu: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="CPU 核数（由规格换算）")
+    memory_gb: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="内存 GB（由规格换算）")
     charge_type: Mapped[str] = mapped_column(String(32), default="", comment="PrePaid | PostPaid")
     private_ip: Mapped[str] = mapped_column(String(128), default="")
     vpc_id: Mapped[str] = mapped_column(String(64), default="")

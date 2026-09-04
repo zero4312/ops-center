@@ -77,6 +77,23 @@ def main() -> int:
         print(f"     新建表：{', '.join(created)}")
     else:
         print("     全部表已存在（本次为幂等校验，未做结构变更）")
+
+    # ---------- 存量表结构升级（幂等：已存在的列自动跳过） ----------
+    migrations = {
+        "resources": [
+            ("cpu", "ALTER TABLE resources ADD COLUMN cpu INT NULL"),
+            ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
+        ],
+    }
+    with engine.begin() as conn:
+        for table, cols in migrations.items():
+            if table not in after:
+                continue
+            existing = {c["name"] for c in inspect(conn).get_columns(table)}
+            for col, ddl in cols:
+                if col not in existing:
+                    conn.execute(text(ddl))
+                    print(f"     已升级：{table} 新增列 {col}")
     print()
 
     # ---------- 管理员 ----------

@@ -229,7 +229,7 @@ def _run_item(action: str, item_id: int) -> None:
                         else provider.stop_rds(res.resource_id))
             return (provider.start_ecs(res.resource_id) if action == "start"
                     else provider.stop_ecs(res.resource_id, force=False,
-                                           stopped_mode="KeepCharging"))
+                                           stopped_mode="StopCharging"))
 
         try:
             if is_rds:
@@ -300,6 +300,8 @@ def refresh_resource_status(db: Session, resource: Resource) -> bool:
                 resource.status = c.status
                 resource.charge_type = c.charge_type or resource.charge_type
                 resource.spec = c.spec or resource.spec
+                resource.cpu = c.cpu if c.cpu is not None else resource.cpu
+                resource.memory_gb = c.memory_gb if c.memory_gb is not None else resource.memory_gb
                 resource.last_sync_at = _now()
                 db.commit()
                 return True
