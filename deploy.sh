@@ -4,6 +4,8 @@
 # 同时适用于：开发本机（macOS / Linux）与云服务器（Linux）
 #
 # 常用命令：
+#   ./deploy.sh bootstrap    检测并自动安装基础环境（Python >= 3.9 / pip / venv / curl / git）
+#   ./deploy.sh env-check    只检测基础环境，不做任何安装
 #   ./deploy.sh install      安装依赖 + 初始化数据库 + 创建管理员（首次部署）
 #   ./deploy.sh start        启动服务（后台常驻）
 #   ./deploy.sh stop         停止服务
@@ -39,25 +41,313 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 log_step()  { echo -e "${BLUE}[STEP]${NC} $*"; }
 
 # -----------------------------------------------------------------------------
-# 基础环境
+# 基础环境：平台识别 / Python / pip / venv / 常用工具
+#   目标：在裸机 Linux（Ubuntu / Debian / RHEL 系 / Alpine）与开发机（macOS）上
+#         一键补齐运行 ops-center 所需的基础环境（Python >= 3.9 起）。
+#   约定：
+#     - 幂等：已满足要求的组件不重复安装，重复执行无副作用
+#     - 需要系统权限时使用 sudo；无权限时给出手动指引，不硬失败
+#     - 非交互场景用 AUTO_INSTALL=yes|no 控制（默认：有终端时询问）
 # -----------------------------------------------------------------------------
-detect_python() {
-    # 优先使用受管 Python，其次系统 python3；要求 >= 3.9
-    for cand in "${PYTHON_BIN:-}" python3.11 python3.12 python3.13 python3; do
+REQUIRED_PY="${REQUIRED_PY:-3.9}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+AUTO_INSTALL="${AUTO_INSTALL:-auto}"
+OS_TYPE=""; OS_ID=""; OS_VER=""; OS_LIKE=""; PKG_MANAGER=""
+
+version_ge() {  # version_ge 3.10 3.9 -> true
+    local a b
+    a="$(echo "${1:-0}" | awk -F. '{printf "%d%03d", $1, $2}')"
+    b="$(echo "${2:-0}" | awk -F. '{printf "%d%03d", $1, $2}')"
+    [ "$a" -ge "$b" ]
+}
+
+detect_platform() {
+    OS_TYPE="$(uname -s)"
+    OS_ID=""; OS_VER=""; OS_LIKE=""
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        OS_ID="${ID:-}"; OS_VER="${VERSION_ID:-}"; OS_LIKE="${ID_LIKE:-}"
+    fi
+    if [ "$OS_TYPE" = "Darwin" ]; then
+        PKG_MANAGER="brew"
+        return
+    fi
+    PKG_MANAGER=""
+    for pm in apt-get dnf yum apk zypper; do
+        if command -v "$pm" >/dev/null 2>&1; then PKG_MANAGER="$pm"; break; fi
+    done
+}
+
+is_root()  { [ "$(id -u)" -eq 0 ]; }
+as_root()  { if is_root; then "$@"; else sudo "$@"; fi; }
+has_priv() { is_root || { command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; }; }
+
+confirm() {
+    case "$AUTO_INSTALL" in
+        yes|1|true) return 0 ;;
+        no|0|false) return 1 ;;
+    esac
+    if [ -t 0 ]; then
+        printf '%s [y/N] ' "$1"
+        read -r ans || ans="n"
+        case "$ans" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+    fi
+    return 1
+}
+
+py_ver_of() { "$1" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo "0.0"; }
+
+find_python() {
+    local cand ver
+    for cand in "${PYTHON_BIN:-}" python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
         [ -n "$cand" ] || continue
-        if command -v "$cand" >/dev/null 2>&1; then
-            local ver
-            ver="$("$cand" -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo 0)"
-            local major minor
-            major="${ver%%.*}"; minor="${ver##*.}"
-            if [ "$major" -ge 3 ] && [ "$minor" -ge 9 ]; then
-                PYTHON_BIN="$(command -v "$cand")"
-                return 0
-            fi
+        command -v "$cand" >/dev/null 2>&1 || continue
+        cand="$(command -v "$cand")"
+        ver="$(py_ver_of "$cand")"
+        if version_ge "$ver" "$REQUIRED_PY"; then
+            PYTHON_BIN="$cand"
+            return 0
         fi
     done
-    log_error "未找到 Python >= 3.9，请先安装"
-    exit 1
+    # 源码安装 / 精简镜像的常见位置，显式补查（PATH 可能未包含）
+    for cand in /usr/local/bin/python3.1[3-9] /usr/local/bin/python3.1[0-9] /usr/local/bin/python3.9; do
+        [ -x "$cand" ] || continue
+        ver="$(py_ver_of "$cand")"
+        if version_ge "$ver" "$REQUIRED_PY"; then
+            PYTHON_BIN="$cand"
+            return 0
+        fi
+    done
+    return 1
+}
+
+python_has_venv() { "$1" -c 'import venv, ensurepip' >/dev/null 2>&1; }
+
+ensure_pip() {
+    local py="$1"
+    "$py" -m pip --version >/dev/null 2>&1 && return 0
+    log_step "为 $py 安装 pip"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO /tmp/get-pip.py https://bootstrap.pypa.io/get-pip.py || return 1
+    else
+        log_warn "系统缺少 curl/wget，无法自动安装 pip"
+        return 1
+    fi
+    as_root "$py" /tmp/get-pip.py >/dev/null 2>&1 || "$py" /tmp/get-pip.py --user >/dev/null 2>&1
+}
+
+install_python_apt() {
+    as_root apt-get update -y || log_warn "apt-get update 失败，继续尝试安装"
+    local cand
+    cand="$(apt-cache policy python3 2>/dev/null | awk '/Candidate:/{print $2}' | head -1)"
+    if version_ge "${cand:-0.0}" "$REQUIRED_PY"; then
+        log_step "apt 安装 Python ${cand}（含 venv / pip / 开发头文件）"
+        as_root apt-get install -y python3 python3-venv python3-pip python3-dev
+        return 0
+    fi
+    if [ "${OS_ID:-}" = "ubuntu" ] || [ "${OS_LIKE:-}" != "${OS_LIKE#*ubuntu*}" ]; then
+        log_step "仓库 Python 版本 ${cand:-未知} 低于 $REQUIRED_PY，改用 deadsnakes 安装 Python 3.11"
+        as_root apt-get install -y software-properties-common ca-certificates curl
+        as_root add-apt-repository -y ppa:deadsnakes/ppa
+        as_root apt-get update -y
+        as_root apt-get install -y python3.11 python3.11-venv python3.11-dev
+        as_root apt-get install -y python3.11-distutils || true
+        ensure_pip "$(command -v python3.11)"
+        return 0
+    fi
+    log_warn "当前 Debian 系仓库 Python 版本为 ${cand:-未知}，低于 $REQUIRED_PY"
+    return 1
+}
+
+install_python_rpm() {
+    local pm="$1"
+    log_step "$pm 安装 python3 / pip / 开发头文件"
+    as_root "$pm" install -y python3 python3-pip python3-devel 2>/dev/null \
+        || as_root "$pm" install -y python3 python3-pip 2>/dev/null || true
+    if find_python; then return 0; fi
+    if [ "$pm" = "dnf" ]; then
+        log_step "仓库版本仍不足，尝试启用 python39 模块流"
+        as_root dnf -y module reset python39 >/dev/null 2>&1 || true
+        if as_root dnf -y module enable python39 >/dev/null 2>&1; then
+            as_root dnf install -y python39 python39-pip python39-devel && return 0
+        fi
+    fi
+    log_warn "$pm 仓库未提供 Python >= $REQUIRED_PY"
+    return 1
+}
+
+install_python_apk() {
+    log_step "apk 安装 python3 / py3-pip / 开发头文件"
+    as_root apk add --no-cache python3 py3-pip python3-dev
+    find_python
+}
+
+install_python_brew() {
+    if ! command -v brew >/dev/null 2>&1; then
+        log_warn "未检测到 Homebrew"
+        if confirm "是否自动安装 Homebrew（需下载 Xcode Command Line Tools，较慢）？"; then
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || return 1
+        else
+            return 1
+        fi
+    fi
+    log_step "brew 安装 python@3.11"
+    brew install python@3.11
+    find_python
+}
+
+install_python_from_source() {
+    local ver="${1:-3.11.9}" tmp jobs
+    if ! confirm "是否从源码编译安装 Python $ver（耗时约 5-15 分钟）？"; then
+        return 1
+    fi
+    log_step "安装编译依赖"
+    case "$PKG_MANAGER" in
+        apt-get) as_root apt-get install -y build-essential zlib1g-dev libssl-dev libffi-dev \
+                    libbz2-dev libreadline-dev libsqlite3-dev wget curl ;;
+        dnf)     as_root dnf install -y gcc make openssl-devel bzip2-devel libffi-devel zlib-devel \
+                    readline-devel sqlite-devel xz-devel wget curl \
+                    || as_root dnf groupinstall -y "Development Tools" ;;
+        yum)     as_root yum install -y gcc make openssl-devel bzip2-devel libffi-devel zlib-devel \
+                    readline-devel sqlite-devel xz-devel wget curl \
+                    || as_root yum groupinstall -y "Development Tools" ;;
+        apk)     as_root apk add --no-cache build-base openssl-dev libffi-dev zlib-dev bzip2-dev \
+                    readline-dev sqlite-dev xz-dev ;;
+        *)       log_warn "未知包管理器 ${PKG_MANAGER:-无}，请自行确保 gcc/openssl 开发库已安装" ;;
+    esac
+    tmp="$(mktemp -d)"
+    log_step "下载 Python $ver 源码"
+    if ! curl -fsSL "https://www.python.org/ftp/python/$ver/Python-$ver.tgz" -o "$tmp/Python-$ver.tgz"; then
+        log_error "源码下载失败，请检查网络连通性（或手动下载至 $tmp 后重试）"
+        return 1
+    fi
+    tar -xzf "$tmp/Python-$ver.tgz" -C "$tmp" || return 1
+    jobs="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+    log_step "编译安装到 /usr/local（make -j$jobs）"
+    ( cd "$tmp/Python-$ver" \
+        && ./configure --prefix=/usr/local --with-ensurepip=install >/dev/null 2>&1 \
+        && make -j"$jobs" >/dev/null 2>&1 \
+        && as_root make altinstall >/dev/null 2>&1 ) || { rm -rf "$tmp"; log_error "编译安装失败"; return 1; }
+    rm -rf "$tmp"
+    find_python
+}
+
+install_python() {
+    case "$PKG_MANAGER" in
+        apt-get) install_python_apt ;;
+        dnf|yum) install_python_rpm "$PKG_MANAGER" ;;
+        apk)     install_python_apk ;;
+        brew)    install_python_brew ;;
+        *)       log_warn "未识别的包管理器，无法自动安装 Python"; return 1 ;;
+    esac
+}
+
+ensure_venv_module() {
+    local py="$1" ver
+    python_has_venv "$py" && return 0
+    ver="$(py_ver_of "$py")"
+    log_warn "$py 缺少 venv 模块，尝试补装"
+    case "$PKG_MANAGER" in
+        apt-get)
+            as_root apt-get update -y || true
+            as_root apt-get install -y "python${ver}-venv" 2>/dev/null \
+                || as_root apt-get install -y python3-venv 2>/dev/null || true
+            ;;
+        dnf|yum) as_root "$PKG_MANAGER" install -y "python${ver/./}-devel" 2>/dev/null || true ;;
+        apk)     as_root apk add --no-cache python3-dev py3-virtualenv 2>/dev/null || true ;;
+    esac
+    python_has_venv "$py"
+}
+
+ensure_base_tools() {
+    local miss=""
+    command -v curl >/dev/null 2>&1 || miss="$miss curl"
+    command -v git  >/dev/null 2>&1 || miss="$miss git"
+    [ -z "$miss" ] && return 0
+    log_warn "缺少常用工具：$miss"
+    if ! has_priv; then
+        log_warn "无 root/sudo 权限，跳过安装（curl 用于健康检查，git 用于 update 拉代码）"
+        return 0
+    fi
+    if ! confirm "是否安装缺少的工具？"; then
+        log_warn "已跳过，继续执行"
+        return 0
+    fi
+    case "$PKG_MANAGER" in
+        apt-get) as_root apt-get update -y || true; as_root apt-get install -y $miss ;;
+        dnf)     as_root dnf install -y $miss ;;
+        yum)     as_root yum install -y $miss ;;
+        apk)     as_root apk add --no-cache $miss ;;
+        brew)    brew install $miss ;;
+    esac
+}
+
+manual_python_hint() {
+    cat <<EOF
+${YELLOW}请手动安装 Python >= ${REQUIRED_PY} 后重试：${NC}
+  Ubuntu/Debian : sudo apt-get update && sudo apt-get install -y python3 python3-venv python3-pip python3-dev
+  Ubuntu 20.04  : sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
+  RHEL/Rocky 8+ : sudo dnf module enable -y python39 && sudo dnf install -y python39 python39-devel python39-pip
+  CentOS 7      : 仓库版本过低，建议源码编译或升级至 Rocky / Alma 8+
+  Alpine        : apk add --no-cache python3 py3-pip python3-dev
+  macOS         : brew install python@3.11
+  通用源码安装  : https://www.python.org/downloads/
+EOF
+}
+
+ensure_base_env() {
+    local check_only="${1:-no}"
+    detect_platform
+    log_info "平台：$OS_TYPE ${OS_ID:-}${OS_VER:+ $OS_VER}  包管理器：${PKG_MANAGER:-未识别}"
+
+    if ! find_python; then
+        log_warn "未找到 Python >= $REQUIRED_PY"
+        if [ "$check_only" = "yes" ]; then
+            manual_python_hint
+            return 1
+        fi
+        if ! has_priv && [ "$PKG_MANAGER" != "brew" ]; then
+            log_error "当前用户无 root/sudo 权限，无法自动安装"
+            manual_python_hint
+            exit 1
+        fi
+        if ! confirm "是否自动安装 Python >= $REQUIRED_PY ？"; then
+            manual_python_hint
+            exit 1
+        fi
+        install_python || install_python_from_source
+        if ! find_python; then
+            log_error "自动安装后仍未找到满足要求的 Python"
+            manual_python_hint
+            exit 1
+        fi
+    fi
+
+    log_info "Python：$(py_ver_of "$PYTHON_BIN")  ($PYTHON_BIN)"
+
+    if [ "$check_only" = "yes" ]; then
+        python_has_venv "$PYTHON_BIN" || log_warn "venv 模块不可用，创建虚拟环境会失败"
+    else
+        if ! python_has_venv "$PYTHON_BIN"; then
+            ensure_venv_module "$PYTHON_BIN" \
+                || log_warn "venv 仍不可用，可改用：pip install virtualenv"
+        fi
+        ensure_base_tools
+    fi
+}
+
+print_env_summary() {
+    echo "--------------------------------------------------------------"
+    printf "%-10s %s\n" "Python" "$(py_ver_of "${PYTHON_BIN:-python3}")  (${PYTHON_BIN:-未找到})"
+    printf "%-10s %s\n" "venv"   "$(python_has_venv "${PYTHON_BIN:-python3}" 2>/dev/null && echo 可用 || echo 不可用)"
+    printf "%-10s %s\n" "pip"    "$("${PYTHON_BIN:-python3}" -m pip --version 2>/dev/null | awk '{print $1" "$2}')"
+    printf "%-10s %s\n" "curl"   "$(command -v curl >/dev/null 2>&1 && echo 已安装 || echo 缺失)"
+    printf "%-10s %s\n" "git"    "$(command -v git  >/dev/null 2>&1 && echo 已安装 || echo 缺失)"
+    printf "%-10s %s\n" "docker" "$(command -v docker >/dev/null 2>&1 && echo '已安装（可选）' || echo '缺失（仅 mysql-up 需要）')"
+    echo "--------------------------------------------------------------"
 }
 
 prepare_dirs() {
@@ -329,7 +619,8 @@ EOF
 # 命令分发
 # -----------------------------------------------------------------------------
 usage() {
-    sed -n '3,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    # 提取文件顶部连续注释块作为帮助信息（跳过 shebang 行）
+    awk 'NR==1 {next} /^#/ {sub(/^# ?/, ""); print; next} {exit}' "${BASH_SOURCE[0]}"
     exit 0
 }
 
@@ -337,13 +628,32 @@ main() {
     local cmd="${1:-}"
     [ -z "$cmd" ] && usage
 
-    # 以下命令不需要 venv
+    # 以下命令不需要 Python 虚拟环境
     case "$cmd" in
         help|-h|--help) usage ;;
         mysql-up) mysql_up; exit 0 ;;
+        stop)    setup_env_file; do_stop;   exit 0 ;;
+        status)  setup_env_file; do_status; exit 0 ;;
+        logs)    setup_env_file; do_logs;   exit 0 ;;
+        bootstrap|env-setup)
+            ensure_base_env
+            print_env_summary
+            log_info "基础环境就绪，下一步：./deploy.sh install"
+            exit 0 ;;
+        env-check)
+            if ensure_base_env yes; then
+                print_env_summary
+                log_info "基础环境满足要求"
+            else
+                print_env_summary
+                log_error "基础环境存在缺失项"
+                exit 1
+            fi
+            exit 0 ;;
     esac
 
-    detect_python
+    # 其余命令：先确保基础环境齐备（首次在裸机部署时会自动安装）
+    ensure_base_env
     prepare_dirs
     setup_env_file
     create_venv
