@@ -26,12 +26,37 @@ logging.basicConfig(
 logger = logging.getLogger("opscenter")
 
 
+def _apply_timestamp_format() -> None:
+    """强制 uvicorn 自身的 access/error 日志也带时间戳。
+
+    uvicorn 在导入本模块后会用自己的默认格式（'INFO: <ip> - ...' / 'ERROR: ...'）
+    覆盖 root logger，导致日志没有时间。此处在其配置完成后，把各 handler 的
+    formatter 换成带 asctime 的格式，保证所有日志行都有时间戳，便于排查。
+    """
+    ts_format = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        lg = logging.getLogger(name)
+        for h in lg.handlers:
+            h.setFormatter(ts_format)
+
+
 # ---------------------------------------------------------------------------
 # 启动初始化
 # ---------------------------------------------------------------------------
 def init_db_and_admin() -> None:
-    """建表 + 初始化管理员账号。"""
+    """建表 + 存量表结构升级（幂等）+ 初始化管理员账号。"""
     Base.metadata.create_all(bind=engine)
+
+    # 模型新增列后，create_all 不会变更已存在的表，这里补 ALTER（幂等）。
+    # 这样部署/重启时自动修复缺失列，避免线上因漏跑迁移而 500。
+    try:
+        from .scripts.init_db import run_column_migrations
+
+        added = run_column_migrations(engine)
+        for col in added:
+            logger.info("已升级表结构：新增列 %s", col)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("存量表结构升级失败（可稍后手动执行 db-init）：%s", exc)
 
     from sqlalchemy.orm import Session
 
@@ -62,6 +87,8 @@ def init_db_and_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # uvicorn 此时已完成自身日志配置，覆盖其 handler 的 formatter 以带上时间戳
+    _apply_timestamp_format()
     logger.info("ops-center 启动中...（数据库：%s）",
                 "SQLite" if settings.is_sqlite else "MySQL")
     init_db_and_admin()

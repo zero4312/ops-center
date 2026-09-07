@@ -19,6 +19,41 @@ import sys
 from sqlalchemy import inspect, select, text
 
 
+def run_column_migrations(engine) -> list[str]:
+    """存量表结构升级（幂等：已存在的列自动跳过）。
+
+    模型新增列后，仅凭 create_all 不会变更已存在的表，必须在启动时补 ALTER。
+    这里集中维护「表 -> [(列名, DDL)]」，所有部署（启动 / db-init）都会执行，
+    避免线上因漏跑迁移而报错（如 operation_tasks.closed_at 缺失导致任务中心 500）。
+    """
+    migrations = {
+        "resources": [
+            ("cpu", "ALTER TABLE resources ADD COLUMN cpu INT NULL"),
+            ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
+            ("engine_version", "ALTER TABLE resources ADD COLUMN engine_version VARCHAR(64) NOT NULL DEFAULT ''"),
+        ],
+        "operation_tasks": [
+            ("closed_at", "ALTER TABLE operation_tasks ADD COLUMN closed_at DATETIME NULL"),
+            ("close_task_id", "ALTER TABLE operation_tasks ADD COLUMN close_task_id INT NULL"),
+        ],
+        "cloud_accounts": [
+            ("last_sync_msg", "ALTER TABLE cloud_accounts ADD COLUMN last_sync_msg TEXT NULL"),
+        ],
+    }
+    added: list[str] = []
+    existing_tables = set(inspect(engine).get_table_names())
+    for table, cols in migrations.items():
+        if table not in existing_tables:
+            continue
+        with engine.begin() as conn:
+            existing_cols = {c["name"] for c in inspect(conn).get_columns(table)}
+            for col, ddl in cols:
+                if col not in existing_cols:
+                    conn.execute(text(ddl))
+                    added.append(f"{table}.{col}")
+    return added
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ops-center 数据库初始化")
     parser.add_argument("--reset-admin", action="store_true", help="重置管理员密码")
@@ -79,27 +114,11 @@ def main() -> int:
         print("     全部表已存在（本次为幂等校验，未做结构变更）")
 
     # ---------- 存量表结构升级（幂等：已存在的列自动跳过） ----------
-    migrations = {
-        "resources": [
-            ("cpu", "ALTER TABLE resources ADD COLUMN cpu INT NULL"),
-            ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
-            ("engine_version", "ALTER TABLE resources ADD COLUMN engine_version VARCHAR(64) NOT NULL DEFAULT ''"),
-        ],
-        "operation_tasks": [
-            ("closed_at", "ALTER TABLE operation_tasks ADD COLUMN closed_at DATETIME NULL"),
-            ("close_task_id", "ALTER TABLE operation_tasks ADD COLUMN close_task_id INT NULL"),
-        ],
-    }
-    with engine.begin() as conn:
-        for table, cols in migrations.items():
-            if table not in after:
-                continue
-            existing = {c["name"] for c in inspect(conn).get_columns(table)}
-            for col, ddl in cols:
-                if col not in existing:
-                    conn.execute(text(ddl))
-                    print(f"     已升级：{table} 新增列 {col}")
-    print()
+    added = run_column_migrations(engine)
+    for col in added:
+        print(f"     已升级：{col}")
+    if added:
+        print()
 
     # ---------- 管理员 ----------
     db = SessionLocal()
