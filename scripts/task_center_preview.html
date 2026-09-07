@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="jHCwjOqOjQeGcvNIGtuhZy">
+<head data-page-node-id="K694Q39Hspy7SHhghZ3uOU">
+<meta charset="UTF-8" data-page-node-id="AStMMxyMR3texc2Vc2YWzF">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="jLQCq7o5U36ePTvGWqJxTk">
+<title>任务中心 · 运行中 · 展示效果预览</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #f0f2f5; color: #303133; padding: 24px; }
+  .page { max-width: 1100px; margin: 0 auto; }
+  .block-title { font-size: 16px; font-weight: 600; color: #303133; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .banner { background: #ecf5ff; border: 1px solid #d9ecff; color: #409eff; padding: 8px 14px;
+            border-radius: 6px; font-size: 13px; margin-bottom: 14px; display: flex; align-items: center; gap: 6px; }
+  .spinner { width: 13px; height: 13px; border: 2px solid #409eff; border-top-color: transparent;
+             border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.06); padding: 4px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: #fafafa; color: #909399; font-weight: 500; text-align: left;
+             padding: 10px 14px; border-bottom: 1px solid #ebeef5; white-space: nowrap; }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid #f2f4f7; color: #606266; vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f5f7fa; }
+  .tag { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 11px;
+         font-size: 12px; line-height: 18px; font-weight: 500; }
+  .tag.run { background: #f0f9eb; color: #67c23a; border: 1px solid #e1f3d8; }
+  .tag.run .dot { width: 6px; height: 6px; border-radius: 50%; background: #67c23a; }
+  .names { display: flex; flex-wrap: wrap; gap: 6px; max-width: 420px; }
+  .chip { background: #f4f4f5; color: #909399; border-radius: 4px; padding: 1px 8px; font-size: 12px; }
+  .chip b { color: #606266; font-weight: 500; }
+  .link { color: #409eff; cursor: pointer; }
+  .btn { border: none; border-radius: 4px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .btn.detail { background: #ecf5ff; color: #409eff; }
+  .btn.stop { background: #409eff; color: #fff; margin-left: 8px; }
+  .btn.stop:hover { background: #66b1ff; }
+  /* 详情抽屉 */
+  .drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; justify-content: flex-end; }
+  .drawer { width: 460px; background: #fff; height: 100%; padding: 20px 24px; box-shadow: -2px 0 8px rgba(0,0,0,.1); overflow:auto; }
+  .drawer h3 { margin: 0 0 4px; font-size: 16px; }
+  .drawer .sub { color: #909399; font-size: 12px; margin-bottom: 16px; }
+  .row { display: flex; padding: 9px 0; border-bottom: 1px dashed #ebeef5; font-size: 13px; }
+  .row .k { width: 92px; color: #909399; flex: none; }
+  .row .v { color: #303133; flex: 1; }
+  .drawer-actions { margin-top: 18px; display: flex; gap: 10px; }
+  .drawer-actions .btn.stop { font-size: 14px; padding: 9px 16px; }
+  .note { margin-top: 18px; font-size: 12px; color: #909399; line-height: 1.7; }
+  code { background: #f4f4f5; padding: 1px 5px; border-radius: 3px; color: #c7254e; }
+</style>
+</head>
+<body data-page-node-id="3DidQJKnUzuPGNdIZZJnDP">
+<div class="page" data-page-node-id="KRpHfC3CzIcHpbkaAc5fn3">
+  <div class="block-title" data-page-node-id="N0CyXTXdgPdtuYFx1tGEKP">🟢 运行中</div>
+  <div class="banner" data-page-node-id="Om8MYhP9ScAWeh9xf999vd"><span class="spinner" data-page-node-id="DkC8jjzKjNvreChfdDcfh1"></span> 进行中 1 个会话（点击「一键关机」即可归档）</div>
+  <div class="card" data-page-node-id="snNauCqsGuAgmX7yG5kR6F">
+    <table data-page-node-id="DY01QE8eeDPG8kWJIoRH5w">
+      <thead data-page-node-id="0ME6ZrSdNAkBAmv1mHehqR">
+        <tr data-page-node-id="M4hAh1A0uofctFSFIkmf3K">
+          <th style="width:60px" data-page-node-id="ovzfuTTas4LqXZ55NYevad">ID</th>
+          <th style="width:110px" data-page-node-id="Pn0J3BDDl0Fp0DyLKhILIK">应用</th>
+          <th style="width:90px" data-page-node-id="Kl4MFB6hC4ojZbL7Fve30F">状态</th>
+          <th style="width:150px" data-page-node-id="Ycauq7UzOIWhdGCeC0WYNp">开机时间</th>
+          <th data-page-node-id="4V1BBJstlB1qEAneK2r05a">目标</th>
+          <th style="width:160px" data-page-node-id="DEwNIYV10YMPF4G0lyeZGj">操作</th>
+        </tr>
+      </thead>
+      <tbody data-page-node-id="r8b0H9DbFYvcJmvte3HLjA">
+        <tr data-page-node-id="Rt9rYGaRB3xtB5sMAeKRe2">
+          <td data-page-node-id="WVT6yzEDKMkzWFa3Q7mTxr">#2</td>
+          <td data-page-node-id="yYbrLtYH6LK9iacB9TT57V"><b data-page-node-id="rkzPxMOXj3VwvATLouEKix">APC-IBA</b></td>
+          <td data-page-node-id="2Cgd7FQ0BffifAPBmAaU0U"><span class="tag run" data-page-node-id="T7TcKVxHvjZkIlm8hFRi5j"><span class="dot" data-page-node-id="RuWBiG9IZX9mItT1BlJlxH"></span>运行中</span></td>
+          <td data-page-node-id="UxTJQiGyvrPtcx0BpmozCY">2026-09-07 16:08:16</td>
+          <td data-page-node-id="VEVIUCCtBaVPtGDhoxwf4r">
+            <div class="names" data-page-node-id="e3OsRfVZnSn5K4bD85LoEk">
+              <span class="chip" data-page-node-id="DAIt5SpcHfFbJC8o1ICDEB"><b data-page-node-id="gctVNl0SYprMonAKNy7grc">ECS</b> APC-IBA-STG-K8S-01</span>
+              <span class="chip" data-page-node-id="AJr1DEluHsVQAL5B7m1GRq"><b data-page-node-id="OBkROHlA616a5RQrT2wNej">ECS</b> APC-IBA-STG-K8S-02</span>
+              <span class="chip" data-page-node-id="R8lXeFiOt4d5V0Rswls6OB"><b data-page-node-id="jGmiMgmkjJPOdjNKga0UvE">ECS</b> APC-IBA-DEV-WAS-F</span>
+              <span class="chip" data-page-node-id="ITZeO5l11mcZXtbrwVoLJI"><b data-page-node-id="gdjYC4RpJGdb6ysz93oLR2">ECS</b> APC-IBA-DEV-WEB-F</span>
+            </div>
+            <div style="color:#909399;font-size:12px;margin-top:4px" data-page-node-id="jGBopUltTOIo7p3bcJa4qJ">共 4 个实例 · 阿里云-账号old-上海</div>
+          </td>
+          <td data-page-node-id="CHGtN9a4Aun679Qe4NfnxS">
+            <button class="btn detail" data-page-node-id="l2Fw8qba07OUctPkxe4KmV">详情</button>
+            <button class="btn stop" data-page-node-id="IPjloRPjJ6ZkwzMnSokCST">一键关机</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="block-title" style="margin-top:28px" data-page-node-id="ZJeu2HPHJEqRHTkqHTPYpC">📁 详情抽屉（点击「详情」后）</div>
+  <div class="drawer-mask" style="position:relative; background:transparent;" data-page-node-id="gIGL7m9uCKVVbKXjqUjutY">
+    <div class="drawer" style="box-shadow:0 0 0 1px #ebeef5;" data-page-node-id="g0ChbyTezo6ErJlT2Kcgyn">
+      <h3 data-page-node-id="elLVi58hllTegue6DitoAm">开机会话 #2</h3>
+      <div class="sub" data-page-node-id="plh3IjyFDulgLJV2k8ZuVJ">APC-IBA · 手动开机 · 操作人 lvpeng</div>
+      <div class="row" data-page-node-id="8zKYovnfUDqvPw83JbN9EE"><span class="k" data-page-node-id="sWL3QGh2JovIwu7lRRGtWo">状态</span><span class="v" data-page-node-id="cvCBC7g3lGFimFw6leC86g"><span class="tag run" data-page-node-id="SJ6VU5C4zErNOeigJacqLa"><span class="dot" data-page-node-id="aCs1xJUKebE7VKQBp4QNx0"></span>运行中</span></span></div>
+      <div class="row" data-page-node-id="sP58VMvcbwqWqycz7kDoN6"><span class="k" data-page-node-id="QhXyh0mfcuLOOIqY7ImVtX">开机时间</span><span class="v" data-page-node-id="CdFNMmeg9VfV5TZ7mbwfEs">2026-09-07 16:08:16</span></div>
+      <div class="row" data-page-node-id="B7vJHTxob32jSwVOIGFFPU"><span class="k" data-page-node-id="1o5Q5PMPTlcnvoZVa4NHNr">完成时间</span><span class="v" data-page-node-id="opY6UTrjoJ2tDwrqadhOtu">2026-09-07 16:08:58</span></div>
+      <div class="row" data-page-node-id="YAAcJqHHfIgTfgFNH3btHR"><span class="k" data-page-node-id="9pwnliZqDRd1Vg9awN3nmc">结果</span><span class="v" data-page-node-id="Z7sqFbBOU0YYvmAOmbDH13">成功 4 / 失败 0 / 跳过 0</span></div>
+      <div class="row" data-page-node-id="koV6FNQvd2ErXVAywjNsgr"><span class="k" data-page-node-id="F0XAvdL6VdzutNqVu7DUYw">目标实例</span>
+        <span class="v" data-page-node-id="EFKsCcB3pNxHhs4dNVkT3C">
+          APC-IBA-STG-K8S-01、APC-IBA-STG-K8S-02、<br data-page-node-id="mrxvrerv1ii9EUT0zV9tmI">
+          APC-IBA-DEV-WAS-F、APC-IBA-DEV-WEB-F
+        </span>
+      </div>
+      <div class="drawer-actions" data-page-node-id="ViQoM8tyHNCYJJyWphKFQ1">
+        <button class="btn stop" data-page-node-id="AzU5gQSOaQU45tfGzPQVcF">一键关机</button>
+        <span style="color:#909399;font-size:12px;align-self:center" data-page-node-id="YWZDcMtUPgBMPyrXWq0TcI">点击后生成节省停机任务并移入「归档」</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note" data-page-node-id="furdBWJDuKNKtPnWjRPAFI">
+    说明：这是按 <code data-page-node-id="IihRtwZmlqRq44eBPp3jNz">backend/app/api/operations.py</code> 的 <code data-page-node-id="JFUmGpFBVTwwQp7hIvGYBs">_task_out</code> 真实返回结构渲染的预览。
+    实际数据已写入库（<code data-page-node-id="Sr0Q7srP03yyJ930sTruGU">operation_tasks.id=2</code>，<code data-page-node-id="keYeOs8zlvU89nEtFPDLtB">action=start</code>，
+    <code data-page-node-id="O4CLBdp1Qwxy2QCHdz1L9T">closed_at</code> 为空 → 出现在「运行中」区块）。刷新真实前端页面即可看到同一条记录。
+    该演示记录的明细为快照（未关联真实 resource_id），因此点击「一键关机」会提示“无可用资源”而不会真正下发到云上，安全。
+  </div>
+</div>
+</body>
+</html>

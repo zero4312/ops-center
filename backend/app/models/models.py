@@ -213,6 +213,10 @@ class OperationTask(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
+    # 开机会话闭环：一键关机后记录关机时间并归档
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="一键关机时间；非空=已归档")
+    close_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="关联的一键关机任务 ID")
+
     items: Mapped[list["TaskItem"]] = relationship(back_populates="task", cascade="all, delete-orphan")
 
 

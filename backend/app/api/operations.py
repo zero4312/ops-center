@@ -14,7 +14,7 @@ from ..core.database import get_db
 from ..models.models import (
     Application, ItemStatus, OperationTask, Resource, TaskItem, TaskStatus,
 )
-from ..services.executor import create_task, write_audit
+from ..services.executor import _now, create_task, write_audit
 from .deps import client_ip, require_operator, require_readonly
 
 router = APIRouter(prefix="/api/operations", tags=["开关机"])
@@ -83,6 +83,15 @@ def execute(body: OperateIn, request: Request,
 
 
 def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dict:
+    items = db.scalars(
+        select(TaskItem).where(TaskItem.task_id == task.id).order_by(TaskItem.id)
+    ).all()
+    # 目标实例（快照，来自任务明细，便于资源删除后仍可读）
+    target_instances = [{
+        "name": i.resource_name,
+        "type": i.resource_type,
+        "account": i.account_name,
+    } for i in items]
     data = {
         "id": task.id,
         "action": task.action,
@@ -91,6 +100,8 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "trigger": task.trigger,
         "operator": task.operator,
         "status": task.status,
+        # 会话状态：运行中 / 已关闭（开机会话闭环）
+        "session_status": "running" if task.closed_at is None else "closed",
         "total": task.total,
         "succeed": task.succeed,
         "failed": task.failed,
@@ -98,15 +109,16 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "started_at": task.started_at,
         "finished_at": task.finished_at,
         "created_at": task.created_at,
+        "closed_at": task.closed_at,
+        "close_task_id": task.close_task_id,
         "policy_id": task.policy_id,
+        "target_instances": target_instances,
+        "instance_names": ", ".join(i["name"] for i in target_instances),
     }
     if task.target_app_id:
         app = db.get(Application, task.target_app_id)
         data["app_name"] = app.name if app else f"app#{task.target_app_id}"
     if with_items:
-        items = db.scalars(
-            select(TaskItem).where(TaskItem.task_id == task.id).order_by(TaskItem.id)
-        ).all()
         data["items"] = [{
             "id": i.id,
             "resource_name": i.resource_name,
@@ -119,34 +131,111 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
             "started_at": i.started_at,
             "finished_at": i.finished_at,
         } for i in items]
+        # 关联的一键关机任务（归档态下钻看关机结果）
+        if task.close_task_id:
+            ct = db.get(OperationTask, task.close_task_id)
+            if ct:
+                citems = db.scalars(
+                    select(TaskItem).where(TaskItem.task_id == ct.id).order_by(TaskItem.id)
+                ).all()
+                data["close_task"] = {
+                    "id": ct.id,
+                    "status": ct.status,
+                    "total": ct.total,
+                    "succeed": ct.succeed,
+                    "failed": ct.failed,
+                    "skipped": ct.skipped,
+                    "items": [{
+                        "resource_name": ci.resource_name,
+                        "resource_type": ci.resource_type,
+                        "account_name": ci.account_name,
+                        "status": ci.status,
+                        "message": ci.message,
+                    } for ci in citems],
+                }
     return data
 
 
 @router.get("")
 def list_tasks(
-    status: str | None = Query(None),
-    action: str | None = Query(None),
-    limit: int = Query(50, ge=1, le=500),
+    state: str | None = Query(None, description="running=运行中会话 | archived=已归档会话 | 空=全部"),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db), _u=Depends(require_readonly),
 ):
-    stmt = select(OperationTask)
-    if status:
-        stmt = stmt.where(OperationTask.status == status)
-    if action:
-        stmt = stmt.where(OperationTask.action == action)
+    """任务中心：只展示开机任务（action=start），按 state 拆分运行中/归档。"""
+    stmt = select(OperationTask).where(OperationTask.action == "start")
+    if state == "running":
+        stmt = stmt.where(OperationTask.closed_at.is_(None))
+    elif state == "archived":
+        stmt = stmt.where(OperationTask.closed_at.isnot(None))
     rows = db.scalars(stmt.order_by(desc(OperationTask.id)).limit(limit)).all()
     return {"items": [_task_out(db, t) for t in rows]}
 
 
 @router.get("/running")
 def running_tasks(db: Session = Depends(get_db), _u=Depends(require_readonly)):
-    """正在执行中的任务，供前端轮询。"""
+    """正在执行中的任务（status=pending|running），供顶部 banner 轮询。"""
     rows = db.scalars(
         select(OperationTask).where(OperationTask.status.in_(
             [TaskStatus.PENDING.value, TaskStatus.RUNNING.value]))
         .order_by(desc(OperationTask.id))
     ).all()
     return {"items": [_task_out(db, t) for t in rows], "count": len(rows)}
+
+
+@router.post("/{task_id}/close")
+def close_task(
+    task_id: int, request: Request,
+    db: Session = Depends(get_db), user=Depends(require_operator),
+):
+    """一键关机：对开机会话下的实例执行节省停机，记录关机时间并归档。
+
+    闭环逻辑：开机 -> 运行中会话 -> 点一键关机 -> 生成 stop 任务(StopCharging)
+              -> 写 closed_at/close_task_id -> 移入归档（已关闭）。
+    已停止的实例由执行引擎自动 skip，仅对运行中的实例真正下发关机。
+    """
+    task = db.get(OperationTask, task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    if task.action != "start":
+        raise HTTPException(400, "只能对开机任务执行一键关机")
+    if task.closed_at is not None:
+        raise HTTPException(400, "该开机会话已关机归档")
+
+    # 收集会话下仍存在的资源（资源可能被删除，需跳过）
+    item_resource_ids = [i.resource_id for i in task.items if i.resource_id]
+    resources = (
+        list(db.scalars(select(Resource).where(Resource.id.in_(item_resource_ids))).all())
+        if item_resource_ids else []
+    )
+    if not resources:
+        raise HTTPException(400, "该开机会话下无可用资源（可能已被删除），无法关机")
+
+    # 生成节省停机任务（异步执行，留审计）
+    stop_task = create_task(
+        db=db,
+        action="stop",
+        resources=resources,
+        operator=f"close:#{task.id}",
+        trigger="manual",
+        target_app_id=task.target_app_id,
+        ordered=True,
+    )
+
+    # 点击即归档：写关机时间，移入归档块
+    task.closed_at = _now()
+    task.close_task_id = stop_task.id
+    db.commit()
+
+    write_audit(db, user.username, "close", f"开机会话#{task.id}",
+                f"对 {len(resources)} 个实例发起节省停机（关机任务#{stop_task.id}）",
+                client_ip(request))
+
+    return {
+        "message": "已发起一键关机",
+        "close_task_id": stop_task.id,
+        "closed_at": task.closed_at,
+    }
 
 
 @router.get("/{task_id}")

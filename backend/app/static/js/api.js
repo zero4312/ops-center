@@ -73,6 +73,7 @@
         listTasks: p => http.get('/operations', { params: p }),
         runningTasks: () => http.get('/operations/running'),
         getTask: id => http.get('/operations/' + id),
+        closeTask: id => http.post('/operations/' + id + '/close'),
 
         // ---- 定时策略 ----
         listPolicies: () => http.get('/schedules'),

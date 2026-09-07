@@ -85,6 +85,10 @@ def main() -> int:
             ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
             ("engine_version", "ALTER TABLE resources ADD COLUMN engine_version VARCHAR(64) NOT NULL DEFAULT ''"),
         ],
+        "operation_tasks": [
+            ("closed_at", "ALTER TABLE operation_tasks ADD COLUMN closed_at DATETIME NULL"),
+            ("close_task_id", "ALTER TABLE operation_tasks ADD COLUMN close_task_id INT NULL"),
+        ],
     }
     with engine.begin() as conn:
         for table, cols in migrations.items():

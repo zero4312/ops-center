@@ -488,53 +488,45 @@
     };
 
     // ======================================================================
-    // 任务中心
+    // 任务中心（开机会话闭环：运行中 / 归档）
     // ======================================================================
     const Operations = {
-        props: ['appId'],
+        props: ['appId', 'me'],
         emits: ['go'],
         template: `
         <div>
             <h2 class="page-title">任务中心</h2>
-            <div class="oc-toolbar">
-                <el-select v-model="q.status" clearable placeholder="状态" style="width:140px" @change="load">
-                    <el-option v-for="(m, k) in taskStatusMeta" :key="k" :label="m.text" :value="k" />
-                </el-select>
-                <el-select v-model="q.action" clearable placeholder="动作" style="width:110px" @change="load">
-                    <el-option label="开机" value="start" />
-                    <el-option label="节省关机" value="stop" />
-                </el-select>
-                <el-button :icon="Refresh" @click="load">刷新</el-button>
+
+            <!-- 运行中 -->
+            <div class="oc-section-title" style="display:flex;align-items:center;margin:4px 0 10px">
+                <el-icon class="is-loading" style="margin-right:6px"><Loading /></el-icon>
+                <span>运行中（{{ runningRows.length }}）</span>
+                <div class="oc-spacer"></div>
+                <el-button :icon="Refresh" size="small" @click="load">刷新</el-button>
             </div>
-            <div class="oc-card" style="padding:8px 0">
-                <el-table :data="rows" v-loading="loading" border size="small" stripe>
+            <div class="oc-card" style="padding:8px 0;margin-bottom:20px">
+                <el-table :data="runningRows" v-loading="loadingRunning" border size="small" stripe>
                     <el-table-column label="ID" prop="id" width="70" />
-                    <el-table-column label="动作" width="90">
-                        <template #default="{ row }">
-                            <el-tag size="small" :type="row.action === 'start' ? 'success' : 'danger'">{{ row.action_label }}</el-tag>
-                        </template>
+                    <el-table-column label="开机时间" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.started_at || row.created_at) }}</template>
                     </el-table-column>
-                    <el-table-column label="目标" width="160">
-                        <template #default="{ row }">{{ row.app_name || row.scope }}</template>
+                    <el-table-column label="目标（实例）" min-width="220">
+                        <template #default="{ row }">
+                            <el-tooltip v-if="(row.target_instances||[]).length > 2" :content="row.instance_names" placement="top">
+                                <span>{{ row.target_instances.slice(0,2).map(i=>i.name).join('、') }} 等{{ row.target_instances.length }}个</span>
+                            </el-tooltip>
+                            <span v-else>{{ row.instance_names || '—' }}</span>
+                        </template>
                     </el-table-column>
                     <el-table-column label="触发" width="90">
-                        <template #default="{ row }">
-                            {{ row.trigger === 'schedule' ? '定时' : '手动' }}
-                        </template>
+                        <template #default="{ row }">{{ row.trigger === 'schedule' ? '定时' : '手动' }}</template>
                     </el-table-column>
                     <el-table-column label="操作人" prop="operator" width="100" />
-                    <el-table-column label="状态" width="110">
+                    <el-table-column label="状态" width="100">
                         <template #default="{ row }">
-                            <el-tag size="small" :type="(taskStatusMeta[row.status] || {}).type">
-                                <el-icon v-if="row.status === 'running'" class="is-loading" style="margin-right:3px"><Loading /></el-icon>
-                                {{ (taskStatusMeta[row.status] || {}).text || row.status }}
+                            <el-tag size="small" type="success">
+                                <el-icon class="is-loading" style="margin-right:3px"><Loading /></el-icon>运行中
                             </el-tag>
-                        </template>
-                    </el-table-column>
-                    <el-table-column label="进度" width="180">
-                        <template #default="{ row }">
-                            <el-progress :percentage="progress(row)" :stroke-width="12"
-                                         :status="row.status === 'failed' ? 'exception' : (row.status === 'success' ? 'success' : undefined)" />
                         </template>
                     </el-table-column>
                     <el-table-column label="成功/失败/跳过" width="130">
@@ -544,8 +536,38 @@
                             <span class="text-muted">{{ row.skipped }}</span>
                         </template>
                     </el-table-column>
-                    <el-table-column label="创建时间" width="170">
-                        <template #default="{ row }">{{ fmtTime(row.created_at) }}</template>
+                    <el-table-column label="操作" width="150" fixed="right">
+                        <template #default="{ row }">
+                            <el-button link type="danger" size="small" :disabled="me.role === 'readonly'" @click="closeOne(row)">一键关机</el-button>
+                            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+                <el-empty v-if="!loadingRunning && !runningRows.length" description="暂无运行中的开机会话" :image-size="60" />
+            </div>
+
+            <!-- 归档 -->
+            <div class="oc-section-title" style="margin:4px 0 10px">已关闭 / 归档（{{ archivedRows.length }}）</div>
+            <div class="oc-card" style="padding:8px 0">
+                <el-table :data="archivedRows" v-loading="loadingArchived" border size="small" stripe>
+                    <el-table-column label="ID" prop="id" width="70" />
+                    <el-table-column label="开机时间" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.started_at || row.created_at) }}</template>
+                    </el-table-column>
+                    <el-table-column label="目标（实例）" min-width="220">
+                        <template #default="{ row }">
+                            <el-tooltip v-if="(row.target_instances||[]).length > 2" :content="row.instance_names" placement="top">
+                                <span>{{ row.target_instances.slice(0,2).map(i=>i.name).join('、') }} 等{{ row.target_instances.length }}个</span>
+                            </el-tooltip>
+                            <span v-else>{{ row.instance_names || '—' }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="关机时间" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.closed_at) }}</template>
+                    </el-table-column>
+                    <el-table-column label="操作人" prop="operator" width="100" />
+                    <el-table-column label="状态" width="100">
+                        <template #default="{ row }"><el-tag size="small" type="info">已关闭</el-tag></template>
                     </el-table-column>
                     <el-table-column label="操作" width="80" fixed="right">
                         <template #default="{ row }">
@@ -553,20 +575,31 @@
                         </template>
                     </el-table-column>
                 </el-table>
+                <el-empty v-if="!loadingArchived && !archivedRows.length" description="暂无归档记录" :image-size="60" />
             </div>
 
-            <el-drawer v-model="detailVisible" :title="'任务 #' + (detail.id || '') + ' 明细'" size="60%">
+            <!-- 详情抽屉 -->
+            <el-drawer v-model="detailVisible" :title="'开机会话 #' + (detail.id || '') + ' 明细'" size="60%">
                 <div v-if="detail.id">
                     <el-descriptions :column="3" border size="small" style="margin-bottom:16px">
-                        <el-descriptions-item label="动作">{{ detail.action_label }}</el-descriptions-item>
                         <el-descriptions-item label="状态">
-                            <el-tag size="small" :type="(taskStatusMeta[detail.status] || {}).type">{{ (taskStatusMeta[detail.status] || {}).text }}</el-tag>
+                            <el-tag size="small" :type="detail.session_status === 'running' ? 'success' : 'info'">
+                                {{ detail.session_status === 'running' ? '运行中' : '已关闭' }}
+                            </el-tag>
                         </el-descriptions-item>
+                        <el-descriptions-item label="触发">{{ detail.trigger === 'schedule' ? '定时' : '手动' }}</el-descriptions-item>
                         <el-descriptions-item label="操作人">{{ detail.operator }}</el-descriptions-item>
-                        <el-descriptions-item label="总数">{{ detail.total }}</el-descriptions-item>
-                        <el-descriptions-item label="成功">{{ detail.succeed }}</el-descriptions-item>
-                        <el-descriptions-item label="失败">{{ detail.failed }}</el-descriptions-item>
+                        <el-descriptions-item label="开机时间">{{ fmtTime(detail.started_at || detail.created_at) }}</el-descriptions-item>
+                        <el-descriptions-item label="关机时间">{{ detail.closed_at ? fmtTime(detail.closed_at) : '—' }}</el-descriptions-item>
+                        <el-descriptions-item label="结果（成/败/跳）">{{ detail.succeed }}/{{ detail.failed }}/{{ detail.skipped }}</el-descriptions-item>
                     </el-descriptions>
+
+                    <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center">
+                        <el-button v-if="detail.session_status === 'running'" type="danger" size="small"
+                                   :icon="SwitchButton" :disabled="me.role === 'readonly'" @click="closeOne(detail)">一键关机</el-button>
+                        <span class="text-muted" style="font-size:12px">目标实例：{{ detail.instance_names || '—' }}</span>
+                    </div>
+
                     <el-table :data="detail.items || []" border size="small" stripe>
                         <el-table-column label="资源" prop="resource_name" min-width="180" show-overflow-tooltip />
                         <el-table-column label="类型" prop="resource_type" width="70" />
@@ -578,37 +611,74 @@
                         </el-table-column>
                         <el-table-column label="结果" prop="message" min-width="220" show-overflow-tooltip />
                     </el-table>
+
+                    <template v-if="detail.close_task">
+                        <h4 style="margin:16px 0 8px">一键关机结果（关机任务 #{{ detail.close_task.id }}）</h4>
+                        <el-table :data="detail.close_task.items || []" border size="small" stripe>
+                            <el-table-column label="资源" prop="resource_name" min-width="180" show-overflow-tooltip />
+                            <el-table-column label="类型" prop="resource_type" width="70" />
+                            <el-table-column label="账号" prop="account_name" width="120" show-overflow-tooltip />
+                            <el-table-column label="状态" width="90">
+                                <template #default="{ row }">
+                                    <el-tag size="small" :type="(itemStatusMeta[row.status] || {}).type">{{ (itemStatusMeta[row.status] || {}).text }}</el-tag>
+                                </template>
+                            </el-table-column>
+                            <el-table-column label="结果" prop="message" min-width="220" show-overflow-tooltip />
+                        </el-table>
+                    </template>
                 </div>
             </el-drawer>
         </div>`,
         data() {
             return {
-                rows: [], loading: false, taskStatusMeta, itemStatusMeta,
-                q: { status: '', action: '' },
-                detailVisible: false, detail: {}
+                runningRows: [], archivedRows: [],
+                loadingRunning: false, loadingArchived: false,
+                itemStatusMeta,
+                detailVisible: false, detail: {},
+                pollTimer: null,
             };
         },
         methods: {
             fmtTime,
-            progress(row) {
-                if (row.status === 'pending') return 0;
-                if (row.status === 'running') {
-                    const done = (row.succeed || 0) + (row.failed || 0) + (row.skipped || 0);
-                    return row.total ? Math.round(done / row.total * 100) : 0;
-                }
-                return 100;
+            loadRunning() {
+                this.loadingRunning = true;
+                api.listTasks({ state: 'running', limit: 100 })
+                    .then(r => { this.runningRows = r.items; })
+                    .catch(() => {})
+                    .finally(() => { this.loadingRunning = false; });
             },
-            load() {
-                this.loading = true;
-                api.listTasks({ status: this.q.status || undefined, action: this.q.action || undefined, limit: 100 })
-                    .then(r => { this.rows = r.items; })
-                    .finally(() => { this.loading = false; });
+            loadArchived() {
+                this.loadingArchived = true;
+                api.listTasks({ state: 'archived', limit: 100 })
+                    .then(r => { this.archivedRows = r.items; })
+                    .catch(() => {})
+                    .finally(() => { this.loadingArchived = false; });
             },
+            load() { this.loadRunning(); this.loadArchived(); },
             openDetail(row) {
                 api.getTask(row.id).then(r => { this.detail = r; this.detailVisible = true; });
-            }
+            },
+            closeOne(row) {
+                const n = (row.target_instances || []).length;
+                this.$confirm(
+                    '确定对开机会话 #' + row.id + ' 下的 ' + n + ' 个实例执行【节省关机】吗？关机后该会话将归档。',
+                    '一键关机', { type: 'warning', confirmButtonText: '确定关机', cancelButtonText: '取消' }
+                ).then(() => api.closeTask(row.id))
+                 .then(() => {
+                     this.$message.success('已发起节省关机，会话已归档');
+                     this.load();
+                 }).catch(() => {});
+            },
+            startPoll() {
+                this.stopPoll();
+                this.pollTimer = setInterval(() => {
+                    if (this.runningRows.length) this.loadRunning();
+                }, 5000);
+            },
+            stopPoll() { if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; } }
         },
-        mounted() { this.load(); }
+        mounted() { this.load(); this.startPoll(); },
+        beforeUnmount() { this.stopPoll(); }
     };
 
     // ======================================================================
