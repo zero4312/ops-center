@@ -9,6 +9,7 @@ import datetime
 import hashlib
 import hmac
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +17,8 @@ from urllib.parse import quote
 import requests
 
 from .base import BaseProvider, CloudResource, ProviderError, mib_to_gb
+
+logger = logging.getLogger(__name__)
 
 TIMEOUT = 30
 PAGE_SIZE = 100
@@ -168,17 +171,23 @@ class VolcengineProvider(BaseProvider):
     def list_rds(self) -> list[CloudResource]:
         out: list[CloudResource] = []
         page = 1
+        total_returned = 0
+        vpc_dropped = 0
         while True:
             result = self._call("rds_mysql", "DescribeDBInstances", "2022-01-01",
                                 {"RegionId": self.region, "PageSize": PAGE_SIZE, "PageNumber": page})
             items = result.get("Instances") or []
+            total_returned += len(items)
             for db in items:
                 vpc = db.get("VpcId") or ""
                 if not self._match_vpc(vpc):
+                    vpc_dropped += 1
+                    logger.debug("火山 RDS %s VpcId=%s 不在白名单，跳过", db.get("InstanceId"), vpc)
                     continue
-                engine = db.get("Engine", "")
-                ver = db.get("EngineVersion", "")
+                engine, ver = self._parse_engine_version(db.get("DBEngineVersion", ""))
                 cpu, mem_gb = self._parse_rds_specs(db)
+                charge_detail = db.get("ChargeDetail") or {}
+                charge = charge_detail.get("ChargeType") or db.get("ChargeType", "")
                 out.append(CloudResource(
                     resource_id=db.get("InstanceId", ""),
                     resource_name=db.get("InstanceName") or db.get("InstanceId", ""),
@@ -190,13 +199,19 @@ class VolcengineProvider(BaseProvider):
                     engine_version=f"{engine} {ver}".strip(),
                     cpu=cpu,
                     memory_gb=mem_gb,
-                    charge_type=self._norm_charge(db.get("ChargeType", "")),
+                    charge_type=self._norm_charge(charge),
                     private_ip=self._extract_endpoint(db),
                     vpc_id=vpc,
                 ))
             if len(items) < PAGE_SIZE:
                 break
             page += 1
+        if total_returned == 0:
+            logger.warning("火山 RDS 同步：API 未返回任何实例（region=%s）。Result 顶层键=%s",
+                           self.region, list(result.keys()))
+        else:
+            logger.info("火山 RDS 同步：API 返回 %d 条，VPC 过滤后 %d 条（丢弃 %d）",
+                        total_returned, len(out), vpc_dropped)
         return out
 
     # ------------------------------------------------------------------
@@ -283,11 +298,31 @@ class VolcengineProvider(BaseProvider):
 
     @staticmethod
     def _extract_endpoint(db: dict) -> str:
-        """取 RDS 连接地址（内网域名优先）。"""
-        eps = db.get("Endpoints") or []
+        """取 RDS 连接地址（内网优先）。
+
+        火山 RDS for MySQL 真实字段为 AddressObject[]（每项含 Domain / IPAddress /
+        NetworkType），与阿里云 Endpoints[] 不同，这里两者都兼容。
+        """
+        eps = db.get("AddressObject") or db.get("Endpoints") or []
         for ep in eps:
             if (ep.get("NetworkType") or "").lower() in ("private", "inner"):
-                return ep.get("DomainName") or ep.get("Address") or ""
+                return ep.get("Domain") or ep.get("IPAddress") or ep.get("Address") or ""
         if eps:
-            return eps[0].get("DomainName") or eps[0].get("Address") or ""
+            return eps[0].get("Domain") or eps[0].get("IPAddress") or eps[0].get("Address") or ""
         return db.get("ConnectionString") or db.get("Endpoint") or ""
+
+    @staticmethod
+    def _parse_engine_version(raw: str) -> tuple[str, str]:
+        """解析火山 DBEngineVersion，如 MySQL_8_0 -> ('MySQL','8.0')、MySQL 8.4 -> ('MySQL','8.4')。"""
+        raw = (raw or "").strip()
+        if not raw:
+            return "", ""
+        if "_" in raw:
+            parts = raw.split("_", 1)
+        elif " " in raw:
+            parts = raw.split(" ", 1)
+        else:
+            return raw, ""
+        engine = parts[0]
+        ver = parts[1].replace("_", ".") if len(parts) > 1 else ""
+        return engine, ver
