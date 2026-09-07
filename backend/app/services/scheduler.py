@@ -11,8 +11,9 @@
 from __future__ import annotations
 
 import atexit
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,7 +23,7 @@ from sqlalchemy import select
 from ..core.config import settings
 from ..core.database import SessionLocal, engine
 from ..models.models import (
-    Application, OperationTask, Resource, SchedulePolicy, ScheduleLog, utcnow,
+    Application, OperationTask, Resource, SchedulePolicy, ScheduleLog, SystemSetting, utcnow,
 )
 
 logger = logging.getLogger("opscenter.scheduler")
@@ -206,16 +207,11 @@ def start_scheduler() -> BackgroundScheduler | None:
         logger.error("调度器启动失败：%s", exc)
         return None
 
-    # 注册资源自动同步
+    # 注册资源自动同步（时间点来自「系统设置」页面，回退解析 env.SYNC_CRON）
     try:
-        trigger = _parse_cron(settings.SYNC_CRON, "Asia/Shanghai")
-        _scheduler.add_job(
-            _run_auto_sync, trigger=trigger, id=SYNC_JOB_ID,
-            name="资源自动同步", replace_existing=True,
-            misfire_grace_time=3600, coalesce=True, max_instances=1,
-        )
+        _register_auto_sync_jobs(_scheduler)
     except Exception as exc:  # noqa: BLE001
-        logger.error("注册自动同步任务失败（cron=%s）：%s", settings.SYNC_CRON, exc)
+        logger.error("注册自动同步任务失败：%s", exc)
 
     # 加载定时策略
     sync_policy_jobs()
@@ -258,3 +254,119 @@ def trigger_policy_now(policy_id: int) -> int | None:
         return task.id
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# 自动同步配置（页面可配置，DB 持久化，运行时可动态重建）
+# ---------------------------------------------------------------------------
+def load_sync_config() -> dict:
+    """读取自动同步配置：优先 DB system_settings，其次回退解析 env.SYNC_CRON。"""
+    try:
+        db = SessionLocal()
+        try:
+            row = db.get(SystemSetting, "sync_cron")
+            if row and row.value:
+                return json.loads(row.value)
+        finally:
+            db.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取系统设置失败，回退 env：%s", exc)
+    return _parse_env_sync_cron(settings.SYNC_CRON)
+
+
+def _parse_env_sync_cron(expr: str) -> dict:
+    """把 env 的 5 段 cron（可多段 `;` 分隔）解析为 {times, weekdays_only}。"""
+    raw = (expr or "").replace("\n", ";")
+    parts = [e.strip() for e in raw.split(";") if e.strip()]
+    times, dows = [], []
+    for p in parts:
+        f = p.split()
+        if len(f) != 5:
+            continue
+        minute, hour, _day, _month, dow = f
+        try:
+            times.append(f"{int(hour):02d}:{int(minute):02d}")
+            dows.append(dow)
+        except ValueError:
+            continue
+    return {"times": times or ["09:00"], "weekdays_only": _dows_weekday_only(dows)}
+
+
+def _dows_weekday_only(dows: list[str]) -> bool:
+    if not dows:
+        return True
+    for d in dows:
+        s = d.replace(" ", "")
+        if s == "*":
+            return False
+        if "6" in s or "0" in s or "7" in s:  # 含周六 / 周日
+            return False
+    return True
+
+
+def _config_to_crons(times: list[str], weekdays_only: bool) -> list[str]:
+    dow = "1-5" if weekdays_only else "*"
+    exprs = []
+    for t in times:
+        try:
+            hh, mm = (int(x) for x in t.split(":"))
+        except (ValueError, AttributeError):
+            continue
+        exprs.append(f"{mm} {hh} * * {dow}")
+    return exprs
+
+
+def _register_auto_sync_jobs(sched: BackgroundScheduler) -> None:
+    """按当前配置注册 / 重建自动同步 job（先清理旧的 resource_auto_sync_*）。"""
+    for _old in [j for j in sched.get_jobs() if str(j.id).startswith(SYNC_JOB_ID)]:
+        try:
+            sched.remove_job(_old.id)
+        except Exception:  # noqa: BLE001
+            pass
+    cfg = load_sync_config()
+    exprs = _config_to_crons(cfg.get("times", []), cfg.get("weekdays_only", True))
+    for idx, expr in enumerate(exprs, start=1):
+        try:
+            trigger = _parse_cron(expr, "Asia/Shanghai")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("注册自动同步任务失败（cron=%s）：%s", expr, exc)
+            continue
+        sched.add_job(
+            _run_auto_sync, trigger=trigger, id=f"{SYNC_JOB_ID}_{idx}",
+            name=f"资源自动同步#{idx}", replace_existing=True,
+            misfire_grace_time=3600, coalesce=True, max_instances=1,
+        )
+
+
+def reschedule_auto_sync(times: list[str], weekdays_only: bool) -> bool:
+    """运行时动态重建自动同步调度（保存系统设置后调用，无需重启）。"""
+    sched = _scheduler
+    if sched is None or not sched.running:
+        return False
+    _register_auto_sync_jobs(sched)
+    return True
+
+
+def preview_next_runs(times: list[str], weekdays_only: bool, limit: int = 6) -> list[str]:
+    """计算各时间点的下次执行时间（北京时间），供前端预览。"""
+    from apscheduler.triggers.cron import CronTrigger
+
+    dow = "1-5" if weekdays_only else "*"
+    tz = timezone(timedelta(hours=8))
+    now = datetime.now(tz)
+    out: list[str] = []
+    for t in times:
+        try:
+            hh, mm = (int(x) for x in t.split(":"))
+        except (ValueError, AttributeError):
+            continue
+        try:
+            trg = CronTrigger(hour=hh, minute=mm, day_of_week=dow, timezone="Asia/Shanghai")
+            nxt = trg.get_next_fire_time(None, now)
+        except Exception:  # noqa: BLE001
+            continue
+        if nxt:
+            out.append(nxt.astimezone(tz).strftime("%Y-%m-%d %H:%M"))
+        if len(out) >= limit:
+            break
+    return out

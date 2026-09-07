@@ -90,7 +90,11 @@
         updateUser: (id, d) => http.put('/users/' + id, d),
         deleteUser: id => http.delete('/users/' + id),
         resetPassword: (id, p) => http.post('/users/' + id + '/reset-password', { new_password: p }),
-        auditLogs: p => http.get('/users/audit-logs', { params: p })
+        auditLogs: p => http.get('/users/audit-logs', { params: p }),
+
+        // ---- 系统设置 ----
+        getSyncCron: () => http.get('/settings/sync-cron'),
+        saveSyncCron: d => http.put('/settings/sync-cron', d)
     };
 
     global.api = api;

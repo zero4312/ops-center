@@ -1179,5 +1179,90 @@
         mounted() { this.load(); }
     };
 
-    global.OCComponents = { Overview, Resources, Operations, Schedules, Accounts, Users, Audit };
+    // ---------------------------------------------------------------------------
+    // 系统设置（首个功能：每日自动更新资源时间点，可配置多个，保存即生效）
+    // ---------------------------------------------------------------------------
+    const SystemSettings = {
+        props: ['me'],
+        data() {
+            return {
+                times: ['09:00'],
+                weekdays_only: true,
+                loading: false,
+                saving: false,
+                nextRuns: []
+            };
+        },
+        methods: {
+            load() {
+                this.loading = true;
+                api.getSyncCron().then(r => {
+                    this.times = (r.times && r.times.length) ? r.times.slice() : ['09:00'];
+                    this.weekdays_only = r.weekdays_only !== false;
+                    this.nextRuns = r.next_runs || [];
+                }).catch(() => {}).finally(() => { this.loading = false; });
+            },
+            addTime() { this.times.push('09:00'); },
+            removeTime(i) { this.times.splice(i, 1); },
+            save() {
+                if (this.me && this.me.role === 'readonly') {
+                    ElementPlus.ElMessage.warning('只读角色不可修改');
+                    return;
+                }
+                if (!this.times.length) {
+                    ElementPlus.ElMessage.warning('请至少保留一个时间点');
+                    return;
+                }
+                this.saving = true;
+                api.saveSyncCron({ times: this.times, weekdays_only: this.weekdays_only })
+                    .then(r => {
+                        this.nextRuns = r.next_runs || [];
+                        ElementPlus.ElMessage.success('已保存，自动更新调度已立即生效');
+                    })
+                    .finally(() => { this.saving = false; });
+            }
+        },
+        mounted() { this.load(); },
+        template: `
+        <div>
+            <h2 class="page-title">系统设置</h2>
+            <el-card class="oc-card" v-loading="loading">
+                <template #header><b>每日自动更新资源</b></template>
+                <el-alert type="info" :closable="false" show-icon style="margin-bottom:16px"
+                    title="平台将按下列时间点的每日自动同步各云账号的 ECS / RDS 资源状态（全量）。保存后立即生效，无需重启。" />
+                <el-form label-width="110px" label-position="right">
+                    <el-form-item label="更新时间点">
+                        <div style="width:100%">
+                            <div v-for="(t, i) in times" :key="i"
+                                 style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+                                <el-time-picker v-model="times[i]" value-format="HH:mm" format="HH:mm"
+                                    placeholder="选择时间" style="width:170px" :disabled="saving" />
+                                <el-button v-if="times.length > 1" circle @click="removeTime(i)" :disabled="saving">
+                                    <el-icon><Delete /></el-icon>
+                                </el-button>
+                            </div>
+                            <el-button @click="addTime" :disabled="saving">
+                                <el-icon><Plus /></el-icon> 添加时间点
+                            </el-button>
+                        </div>
+                    </el-form-item>
+                    <el-form-item label="仅工作日">
+                        <el-switch v-model="weekdays_only" :disabled="saving" />
+                        <span class="text-muted" style="margin-left:10px">开启后仅周一至周五更新（周末不更新）</span>
+                    </el-form-item>
+                    <el-form-item>
+                        <el-button type="primary" :loading="saving" @click="save">保存设置</el-button>
+                        <span v-if="me && me.role === 'readonly'" class="text-muted" style="margin-left:10px">只读角色不可修改</span>
+                    </el-form-item>
+                </el-form>
+                <div v-if="nextRuns.length" style="margin-top:8px">
+                    <div class="text-muted" style="margin-bottom:8px">下次执行时间（北京时间）：</div>
+                    <el-tag v-for="(r, i) in nextRuns" :key="i" style="margin:0 8px 8px 0">{{ r }}</el-tag>
+                </div>
+            </el-card>
+        </div>
+        `
+    };
+
+    global.OCComponents = { Overview, Resources, Operations, Schedules, Accounts, Users, Audit, SystemSettings };
 })(window);

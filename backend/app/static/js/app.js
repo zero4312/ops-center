@@ -9,7 +9,7 @@
     const VIEW_COMPONENT = {
         overview: 'Overview', resources: 'Resources',
         tasks: 'Operations', schedules: 'Schedules',
-        accounts: 'Accounts', users: 'Users', audit: 'Audit'
+        accounts: 'Accounts', users: 'Users', audit: 'Audit', settings: 'SystemSettings'
     };
 
     const ROLE_LABELS = { admin: '管理员', operator: '运维', readonly: '只读' };
@@ -53,12 +53,13 @@
                 },
                 {
                     title: '系统管理',
-                    items: [
-                        { key: 'accounts', label: '云账号', icon: 'Link' },
-                        { key: 'users', label: '用户与权限', icon: 'User' },
-                        { key: 'audit', label: '审计日志', icon: 'Document' }
-                    ]
-                }
+                        items: [
+                            { key: 'settings', label: '系统设置', icon: 'Setting' },
+                            { key: 'accounts', label: '云账号', icon: 'Link' },
+                            { key: 'users', label: '用户与权限', icon: 'User' },
+                            { key: 'audit', label: '审计日志', icon: 'Document' }
+                        ]
+                    }
             ];
 
             const viewComponent = computed(() => C[VIEW_COMPONENT[view.value]] || C.Overview);
@@ -119,7 +120,7 @@
             const PATH_MAP = {
                 overview: 'overview', resources: 'resources',
                 tasks: 'tasks', schedules: 'schedules',
-                accounts: 'accounts', users: 'users', audit: 'audit'
+                accounts: 'accounts', users: 'users', audit: 'audit', settings: 'settings'
             };
             function resolveViewFromPath() {
                 const seg = (window.location.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();

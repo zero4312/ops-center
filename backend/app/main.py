@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings
 from .core.database import Base, engine
-from .api import accounts, apps, auth, operations, resources, schedules, users
+from .api import accounts, apps, auth, operations, resources, schedules, users, settings as settings_api
 from .models import models  # noqa: F401  确保模型被注册
 from .services import scheduler as scheduler_svc
 
@@ -114,6 +114,7 @@ app.include_router(resources.router)
 app.include_router(operations.router)
 app.include_router(schedules.router)
 app.include_router(users.router)
+app.include_router(settings_api.router)
 
 
 # ---------------------------------------------------------------------------

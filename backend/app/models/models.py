@@ -305,3 +305,15 @@ class AuditLog(Base):
     client_ip: Mapped[str] = mapped_column(String(64), default="")
     result: Mapped[str] = mapped_column(String(16), default="success")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=True, index=True)
+
+
+# ---------------------------------------------------------------------------
+# 11. 系统设置（KV 表，供「系统设置」页面持久化配置；key 固定业务含义）
+# ---------------------------------------------------------------------------
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True, comment="设置项标识，如 sync_cron")
+    value: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON 序列化的配置值")
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
