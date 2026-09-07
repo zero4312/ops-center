@@ -57,7 +57,7 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
 
     try:
         provider = get_provider(account)
-        cloud_resources = provider.list_all()
+        cloud_resources, type_errors = provider.list_all()
     except ProviderError as exc:
         stat.update(ok=False, message=str(exc))
         account.last_sync_at = _now()
@@ -139,10 +139,19 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
 
     stat["total"] = len(seen_ids)
     account.last_sync_at = _now()
-    account.last_sync_msg = (
-        f"成功：新增 {stat['added']}，更新 {stat['updated']}，"
-        f"云上已释放 {stat['removed']}，共 {stat['total']} 个"
-    )
+    if type_errors:
+        err_msg = "；".join(type_errors)
+        account.last_sync_msg = (
+            f"部分成功：新增 {stat['added']}，更新 {stat['updated']}，"
+            f"云上已释放 {stat['removed']}，共 {stat['total']} 个；"
+            f"以下类型同步失败：{err_msg}"
+        )
+        stat["message"] = f"部分类型失败：{err_msg}"
+    else:
+        account.last_sync_msg = (
+            f"成功：新增 {stat['added']}，更新 {stat['updated']}，"
+            f"云上已释放 {stat['removed']}，共 {stat['total']} 个"
+        )
     db.commit()
     return stat
 

@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import abc
+import logging
 import re
 from dataclasses import dataclass, field, asdict
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -102,8 +105,13 @@ class BaseProvider(abc.ABC):
         """停止 RDS 实例（阿里云称暂停），返回 request_id。"""
 
     # ---------------- 通用能力 ----------------
-    def list_all(self) -> list[CloudResource]:
-        """拉取 ECS + RDS；单类失败不影响另一类。"""
+    def list_all(self) -> tuple[list[CloudResource], list[str]]:
+        """拉取 ECS + RDS；单类失败不影响另一类。
+
+        返回 (资源列表, 各类型错误信息列表)。
+        仅当两类全部失败时抛出 ProviderError；部分成功时把失败类型通过
+        错误信息列表返回，交由上层（同步服务）在同步结果中体现，避免被静默吞掉。
+        """
         out: list[CloudResource] = []
         errors: list[str] = []
         for fn, label in ((self.list_ecs, "ECS"), (self.list_rds, "RDS")):
@@ -111,9 +119,11 @@ class BaseProvider(abc.ABC):
                 out.extend(fn())
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{label}: {exc}")
+        if errors:
+            logger.warning("云资源同步部分失败: %s", "; ".join(errors))
         if errors and not out:
             raise ProviderError("; ".join(errors))
-        return out
+        return out, errors
 
     def _match_vpc(self, vpc_id: str) -> bool:
         """若账号配置了 VPC 白名单，则只纳管命中 VPC 的资源。"""

@@ -24,6 +24,15 @@ PAGE_SIZE = 100
 class VolcengineProvider(BaseProvider):
     provider_name = "volcengine"
 
+    # 火山 OpenAPI 各服务的「域名前缀」与「签名 service 名」并非总是一致：
+    #   - ecs        -> 域名 ecs.<region>.volcengineapi.com，签名 service=ecs
+    #   - rds_mysql  -> 域名 rds-mysql.<region>.volcengineapi.com（连字符），
+    #                   签名 service=rds_mysql（下划线）
+    # 这里单独维护「域名前缀」映射；签名仍用 _call 传入的 service 参数（下划线形式）。
+    _ENDPOINT_PREFIX = {
+        "rds_mysql": "rds-mysql",
+    }
+
     # ------------------------------------------------------------------
     # SigV4 签名
     # ------------------------------------------------------------------
@@ -87,7 +96,8 @@ class VolcengineProvider(BaseProvider):
         return headers
 
     def _call(self, service: str, action: str, version: str, payload: dict) -> dict:
-        host = f"{service}.{self.region}.volcengineapi.com"
+        host_prefix = self._ENDPOINT_PREFIX.get(service, service)
+        host = f"{host_prefix}.{self.region}.volcengineapi.com"
         body = json.dumps(payload, ensure_ascii=False)
         headers = self._sign(host, "POST", action, version, body,
                              self.ak, self.sk, self.region, service)
