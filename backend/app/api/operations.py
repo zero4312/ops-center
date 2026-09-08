@@ -74,9 +74,23 @@ def execute(body: OperateIn, request: Request,
     )
 
     action_cn = "开机" if body.action == "start" else "节省关机"
-    target = f"应用#{body.app_id}" if body.app_id else f"{len(resources)} 个资源"
-    write_audit(db, user.username, body.action, target,
-                f"{action_cn} {len(resources)} 个资源", client_ip(request))
+    # 审计「对象」：start/stop 展示具体操作实例，而非笼统的 "N 个资源"
+    inst_names = [r.resource_name or r.cloud_resource_id
+                  for r in resources if (r.resource_name or r.cloud_resource_id)]
+    inst_full = "；".join(
+        f"{r.resource_name or r.cloud_resource_id}({r.resource_type})"
+        for r in resources if (r.resource_name or r.cloud_resource_id))
+    inst_names_str = "、".join(inst_names)
+    # target 列为 VARCHAR(255)，超长则截断并标注总数
+    if len(inst_names_str) > 230:
+        target = inst_names_str[:230] + f"…（共 {len(resources)} 个实例）"
+    elif inst_names_str:
+        target = inst_names_str
+    else:
+        target = f"应用#{body.app_id}" if body.app_id else f"{len(resources)} 个资源"
+    detail = (f"{action_cn} {len(resources)} 个资源：" + inst_full) \
+        if inst_full else f"{action_cn} {len(resources)} 个资源"
+    write_audit(db, user.username, body.action, target, detail, client_ip(request))
 
     return {"task_id": task.id, "total": len(resources),
             "message": f"{action_cn}指令已下发，共 {len(resources)} 个资源"}
