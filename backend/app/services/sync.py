@@ -127,10 +127,13 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
         res.auto_app_id = app.id
         res.effective_app_id = res.manual_app_id if res.manual_app_id else res.auto_app_id
 
-    # ---- 标记云上已释放的资源 ----
+    # ---- 标记云上已释放的资源（仅纳入纳管的资源才记录到「已释放资源」）----
     if seen_ids:
         existing = db.scalars(
-            select(Resource).where(Resource.account_id == account.id)
+            select(Resource).where(
+                Resource.account_id == account.id,
+                Resource.managed.is_(True),
+            )
         ).all()
         for res in existing:
             if res.resource_id not in seen_ids and not res.deleted_on_cloud:

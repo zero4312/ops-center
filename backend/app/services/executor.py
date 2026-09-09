@@ -358,8 +358,10 @@ def refresh_resource_status(db: Session, resource: Resource) -> bool:
                 resource.last_sync_at = _now()
                 db.commit()
                 return True
-        resource.deleted_on_cloud = True
-        resource.released_at = _now()  # 记录云上释放时间
+        if resource.managed:
+            resource.deleted_on_cloud = True
+            resource.released_at = _now()  # 记录云上释放时间
+        resource.last_sync_at = _now()
         db.commit()
         return False
     except Exception as exc:  # noqa: BLE001
