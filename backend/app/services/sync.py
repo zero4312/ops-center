@@ -120,6 +120,7 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
         res.stop_saving = saving
         res.stop_saving_reason = saving_reason
         res.deleted_on_cloud = False
+        res.released_at = None  # 资源重现，清除释放时间，生命周期重启
         res.last_sync_at = _now()
 
         # 应用归属：自动解析写入 auto_app_id；手工绑定(manual_app_id)优先级更高
@@ -134,6 +135,7 @@ def sync_account(db: Session, account: CloudAccount) -> dict:
         for res in existing:
             if res.resource_id not in seen_ids and not res.deleted_on_cloud:
                 res.deleted_on_cloud = True
+                res.released_at = _now()  # 记录云上释放时间
                 res.last_sync_at = _now()
                 stat["removed"] += 1
 

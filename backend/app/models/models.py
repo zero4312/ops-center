@@ -170,6 +170,7 @@ class Resource(Base):
     # 纳管控制
     managed: Mapped[bool] = mapped_column(Boolean, default=True, comment="False=排除出开关机范围")
     deleted_on_cloud: Mapped[bool] = mapped_column(Boolean, default=False, comment="云上已释放")
+    released_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, comment="云上释放时间（仅 deleted_on_cloud=True 时有值）")
 
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)

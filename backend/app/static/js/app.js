@@ -7,7 +7,7 @@
 
     // view key（小写，用于 URL）→ 组件名（components.js 导出，首字母大写）
     const VIEW_COMPONENT = {
-        overview: 'Overview', resources: 'Resources',
+        overview: 'Overview', resources: 'Resources', released: 'ReleasedResources',
         tasks: 'Operations', schedules: 'Schedules',
         accounts: 'Accounts', users: 'Users', audit: 'Audit', settings: 'SystemSettings'
     };
@@ -41,7 +41,8 @@
                     title: '资源视图',
                     items: [
                         { key: 'overview', label: '概览', icon: 'Odometer' },
-                        { key: 'resources', label: '资源清单', icon: 'Grid' }
+                        { key: 'resources', label: '资源清单', icon: 'Grid' },
+                        { key: 'released', label: '已释放资源', icon: 'Delete' }
                     ]
                 },
                 {
@@ -118,7 +119,7 @@
 
             // 视图 key -> URL 路径映射（SPA 前端路由，服务端已做回退到 index.html）
             const PATH_MAP = {
-                overview: 'overview', resources: 'resources',
+                overview: 'overview', resources: 'resources', released: 'released',
                 tasks: 'tasks', schedules: 'schedules',
                 accounts: 'accounts', users: 'users', audit: 'audit', settings: 'settings'
             };

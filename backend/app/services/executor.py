@@ -323,6 +323,7 @@ def _refresh_status_for_task(db: Session, task_id: int) -> None:
                 else:
                     # 云上已无此实例（已释放），停止轮询该资源
                     r.deleted_on_cloud = True
+                    r.released_at = _now()  # 记录云上释放时间
                     r.last_sync_at = _now()
                     continue
         db.commit()
@@ -358,6 +359,7 @@ def refresh_resource_status(db: Session, resource: Resource) -> bool:
                 db.commit()
                 return True
         resource.deleted_on_cloud = True
+        resource.released_at = _now()  # 记录云上释放时间
         db.commit()
         return False
     except Exception as exc:  # noqa: BLE001

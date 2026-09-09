@@ -53,6 +53,7 @@ def _resource_out(res: Resource) -> dict:
         "stop_saving_reason": res.stop_saving_reason,
         "managed": res.managed,
         "deleted_on_cloud": res.deleted_on_cloud,
+        "released_at": res.released_at,
         "last_sync_at": res.last_sync_at,
         "account_id": res.account_id,
         "account_name": res.account.name if res.account else "",

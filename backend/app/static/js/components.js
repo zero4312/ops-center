@@ -1264,5 +1264,86 @@
         `
     };
 
-    global.OCComponents = { Overview, Resources, Operations, Schedules, Accounts, Users, Audit, SystemSettings };
+    // ======================================================================
+    // 已释放资源（云上已删除，仅留记录可追溯，无操作按钮）
+    // ======================================================================
+    const ReleasedResources = {
+        props: ['appId', 'env'],
+        template: `
+        <div>
+            <h2 class="page-title">已释放资源
+                <el-tag size="small" type="info" style="margin-left:8px">{{ total }} 条记录</el-tag>
+            </h2>
+            <el-alert type="info" :closable="false" show-icon
+                      title="以下资源在云上已被删除，自动从「资源清单」移出并保留在此记录释放时间，仅供追溯，不可操作。"
+                      style="margin-bottom:12px" />
+            <div class="oc-toolbar">
+                <el-input v-model="q.keyword" placeholder="实例名 / ID 搜索" clearable style="width:220px"
+                          @keyup.enter="load(1)" @clear="load(1)" />
+                <el-button :icon="Search" @click="load(1)">查询</el-button>
+                <div class="oc-spacer"></div>
+                <span class="text-muted">按释放时间倒序</span>
+            </div>
+
+            <div class="oc-card" style="padding:8px 0">
+                <el-table :data="rows" v-loading="loading" border size="small" stripe empty-text="暂无已释放资源">
+                    <el-table-column label="实例名称" prop="resource_name" min-width="200" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            <span :title="row.resource_name">{{ row.resource_name || row.resource_id }}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="类型" width="70">
+                        <template #default="{ row }">
+                            <el-tag size="small" :type="row.resource_type === 'ECS' ? 'primary' : 'success'">{{ row.resource_type }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="云账号" prop="account_name" width="150" show-overflow-tooltip />
+                    <el-table-column label="应用" prop="app_name" width="140" show-overflow-tooltip />
+                    <el-table-column label="实例ID" prop="resource_id" min-width="160" show-overflow-tooltip />
+                    <el-table-column label="释放时间" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.released_at) }}</template>
+                    </el-table-column>
+                    <el-table-column label="上次同步" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.last_sync_at) }}</template>
+                    </el-table-column>
+                </el-table>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;align-items:center">
+                <span class="text-muted" style="margin-right:12px">共 {{ total }} 条</span>
+                <el-pagination layout="prev, pager, next" :total="total" :page-size="q.page_size"
+                               :current-page="q.page" @current-change="p => { q.page = p; load(); }" />
+            </div>
+        </div>`,
+        data() {
+            return {
+                rows: [], total: 0, loading: false,
+                q: { keyword: '', page: 1, page_size: 50 }
+            };
+        },
+        methods: {
+            fmtTime,
+            load(page) {
+                if (page) this.q.page = page;
+                this.loading = true;
+                api.listResources({
+                    only_deleted: true,
+                    keyword: this.q.keyword || undefined,
+                    page: this.q.page, page_size: this.q.page_size
+                }).then(r => {
+                    // 按释放时间倒序，最近释放的排在最前
+                    const items = (r.items || []).slice().sort((a, b) => {
+                        const ta = a.released_at ? String(a.released_at) : '';
+                        const tb = b.released_at ? String(b.released_at) : '';
+                        return tb.localeCompare(ta);
+                    });
+                    this.rows = items;
+                    this.total = r.total;
+                }).finally(() => { this.loading = false; });
+            }
+        },
+        mounted() { this.load(); }
+    };
+
+    global.OCComponents = { Overview, Resources, ReleasedResources, Operations, Schedules, Accounts, Users, Audit, SystemSettings };
 })(window);

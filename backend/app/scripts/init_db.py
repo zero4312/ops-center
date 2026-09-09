@@ -31,6 +31,7 @@ def run_column_migrations(engine) -> list[str]:
             ("cpu", "ALTER TABLE resources ADD COLUMN cpu INT NULL"),
             ("memory_gb", "ALTER TABLE resources ADD COLUMN memory_gb INT NULL"),
             ("engine_version", "ALTER TABLE resources ADD COLUMN engine_version VARCHAR(64) NOT NULL DEFAULT ''"),
+            ("released_at", "ALTER TABLE resources ADD COLUMN released_at DATETIME NULL"),
         ],
         "operation_tasks": [
             ("closed_at", "ALTER TABLE operation_tasks ADD COLUMN closed_at DATETIME NULL"),
