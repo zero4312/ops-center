@@ -58,28 +58,22 @@
         <div>
             <h2 class="page-title">{{ appId ? '当前应用概览' : '全局概览' }}</h2>
             <el-row :gutter="14">
-                <el-col :span="6">
+                <el-col :span="8">
                     <div class="oc-card stat-card">
                         <div class="stat-value text-primary">{{ summary.total }}</div>
                         <div class="stat-label">资源总数</div>
                     </div>
                 </el-col>
-                <el-col :span="6">
+                <el-col :span="8">
                     <div class="oc-card stat-card">
                         <div class="stat-value text-success">{{ runningTotal }}</div>
                         <div class="stat-label">运行中</div>
                     </div>
                 </el-col>
-                <el-col :span="6">
+                <el-col :span="8">
                     <div class="oc-card stat-card">
                         <div class="stat-value text-danger">{{ stoppedTotal }}</div>
                         <div class="stat-label">已停止</div>
-                    </div>
-                </el-col>
-                <el-col :span="6">
-                    <div class="oc-card stat-card">
-                        <div class="stat-value text-warning">{{ summary.stop_saving_count }}</div>
-                        <div class="stat-label">停机可省资源</div>
                     </div>
                 </el-col>
             </el-row>
@@ -104,7 +98,7 @@
             </div>
 
             <el-row :gutter="14" style="margin-top:4px">
-                <el-col :span="8">
+                <el-col :span="24">
                     <div class="oc-card">
                         <h3 style="margin:0 0 12px;font-size:15px">按资源类型</h3>
                         <div v-for="(v, k) in summary.by_type" :key="k" style="margin-bottom:10px">
@@ -118,55 +112,25 @@
                         <el-empty v-if="!Object.keys(summary.by_type || {}).length" description="暂无资源" :image-size="60" />
                     </div>
                 </el-col>
-                <el-col :span="8">
-                    <div class="oc-card">
-                        <h3 style="margin:0 0 12px;font-size:15px">应用资源 TOP10</h3>
-                        <div v-for="a in topApps" :key="a.id" style="display:flex;align-items:center;margin-bottom:9px">
-                            <span style="width:150px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="a.name">{{ a.name }}</span>
-                            <el-progress :percentage="pct(a.stats.total, maxAppTotal)" :stroke-width="10"
-                                         style="flex:1" :show-text="false" color="#67c23a" />
-                            <span style="width:40px;text-align:right;font-size:13px;color:#909399">{{ a.stats.total }}</span>
-                        </div>
-                        <el-empty v-if="!topApps.length" description="暂无应用" :image-size="60" />
-                    </div>
-                </el-col>
-                <el-col :span="8">
-                    <div class="oc-card">
-                        <h3 style="margin:0 0 12px;font-size:15px">最近任务</h3>
-                        <div v-for="t in recentTasks" :key="t.id" style="display:flex;align-items:center;margin-bottom:9px;font-size:13px">
-                            <el-tag size="small" :type="(taskStatusMeta[t.status]||{}).type">{{ t.action_label }}</el-tag>
-                            <span style="margin-left:8px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.app_name || ('#'+t.id) }}</span>
-                            <span class="text-muted">{{ fmtTime(t.created_at) }}</span>
-                        </div>
-                        <el-empty v-if="!recentTasks.length" description="暂无任务" :image-size="60" />
-                    </div>
-                </el-col>
             </el-row>
         </div>`,
         data() {
             return {
                 summary: { by_type: {}, stop_saving_count: 0, total: 0 },
-                apps: [], tasks: [], taskStatusMeta,
                 runningRows: [], runningLoading: false
             };
         },
         computed: {
             runningTotal() { return this.sumTotals('running'); },
-            stoppedTotal() { return this.sumTotals('stopped'); },
-            topApps() { return this.apps.slice(0, 10); },
-            maxAppTotal() { return Math.max(1, ...this.apps.map(a => a.stats.total)); },
-            recentTasks() { return this.tasks.slice(0, 8); }
+            stoppedTotal() { return this.sumTotals('stopped'); }
         },
         methods: {
-            fmtTime,
             pct(n, total) { return total ? Math.round(n / total * 100) : 0; },
             sumTotals(k) {
                 return Object.values(this.summary.by_type || {}).reduce((s, v) => s + (v[k] || 0), 0);
             },
             load() {
                 api.summary({ app_id: this.appId }).then(r => { this.summary = r; });
-                api.listApps().then(r => { this.apps = r.items.filter(a => a.stats.total > 0); });
-                api.listTasks({ limit: 20 }).then(r => { this.tasks = r.items; });
                 this.runningLoading = true;
                 api.listResources({ app_id: this.appId, power_state: 'running', page: 1, page_size: 500 })
                     .then(r => { this.runningRows = r.items; })
