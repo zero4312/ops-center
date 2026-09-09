@@ -13,7 +13,9 @@
 """
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
@@ -259,7 +261,20 @@ def _run_item(action: str, item_id: int) -> None:
 # 状态回刷
 # ---------------------------------------------------------------------------
 def _refresh_status_for_task(db: Session, task_id: int) -> None:
-    """任务结束后，回刷相关资源的真实状态。"""
+    """任务结束后，轮询回刷相关资源的真实状态，直到达到目标态或超时。
+
+    云厂商 start/stop 为异步操作，指令下发后实例处于 Starting/Stopping 过渡态。
+    本函数每隔 REFRESH_POLL_INTERVAL 秒回查一次云上真实状态并写回 Resource.status，
+    直到全部实例到达目标态（running/stopped）或累计等待超过 OP_TIMEOUT 秒。
+    仅处理本次执行成功（指令已下发）的实例；账户不可用或 list 失败则下一轮重试。
+    """
+    logger = logging.getLogger("opscenter.executor")
+
+    task = db.get(OperationTask, task_id)
+    if task is None:
+        return
+    want = _target_status(task.action)  # running / stopped
+
     items = db.scalars(
         select(TaskItem).where(
             TaskItem.task_id == task_id,
@@ -267,26 +282,62 @@ def _refresh_status_for_task(db: Session, task_id: int) -> None:
             TaskItem.resource_id.isnot(None),
         )
     ).all()
+    pending_ids = [i.resource_id for i in items if i.resource_id]
+    if not pending_ids:
+        return
 
-    by_account: dict[int, list[str]] = {}
-    for item in items:
-        by_account.setdefault(item.resource_id, []).append(item.cloud_resource_id)
+    interval = max(5, int(settings.REFRESH_POLL_INTERVAL or 60))
+    timeout = max(interval, int(settings.OP_TIMEOUT or 600))
+    deadline = time.monotonic() + timeout
 
-    resources = db.scalars(
-        select(Resource).where(Resource.id.in_([i.resource_id for i in items]))
-    ).all()
-    for res in resources:
-        try:
-            provider = get_provider(res.account)
-            cloud_list = (provider.list_ecs() if res.resource_type.upper() == "ECS"
-                          else provider.list_rds())
+    while pending_ids and time.monotonic() < deadline:
+        # 按 (账号, 类型) 分组，每组只调一次 list，降低云 API 调用频次
+        resources = db.scalars(
+            select(Resource).where(Resource.id.in_(pending_ids))
+        ).all()
+        groups: dict[tuple, list[Resource]] = {}
+        for r in resources:
+            groups.setdefault((r.account_id, r.resource_type.upper()), []).append(r)
+
+        still_pending: list[int] = []
+        for (account_id, rtype), rlist in groups.items():
+            account = db.get(CloudAccount, account_id)
+            if account is None or not account.enabled:
+                still_pending.extend(r.id for r in rlist)
+                continue
+            try:
+                provider = get_provider(account)
+                cloud_list = provider.list_ecs() if rtype == "ECS" else provider.list_rds()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("回刷状态 list 失败(account=%s): %s", account_id, exc)
+                still_pending.extend(r.id for r in rlist)
+                continue
             mapping = {c.resource_id: c.status for c in cloud_list}
-            if res.resource_id in mapping:
-                res.status = mapping[res.resource_id]
-                res.last_sync_at = _now()
-        except Exception:  # noqa: BLE001
-            continue
-    db.commit()
+            for r in rlist:
+                if r.resource_id in mapping:
+                    r.status = mapping[r.resource_id]
+                    r.last_sync_at = _now()
+                    if mapping[r.resource_id].lower() == want:
+                        continue  # 已落定，移出 pending
+                    still_pending.append(r.id)
+                else:
+                    # 云上已无此实例（已释放），停止轮询该资源
+                    r.deleted_on_cloud = True
+                    r.last_sync_at = _now()
+                    continue
+        db.commit()
+
+        pending_ids = still_pending
+        if not pending_ids:
+            break
+        if time.monotonic() < deadline:
+            time.sleep(interval)
+
+    if pending_ids:
+        logger.warning(
+            "回刷状态超时（task=%s, 目标=%s, 仍有 %d 个未落定），将于下次同步补齐",
+            task_id, want, len(pending_ids),
+        )
 
 
 def refresh_resource_status(db: Session, resource: Resource) -> bool:

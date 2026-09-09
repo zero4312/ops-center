@@ -38,6 +38,8 @@ class Settings:
     # ---------- 调度与执行 ----------
     SYNC_CRON: str = _env("OPS_SYNC_CRON", "30 8 * * *")
     OP_TIMEOUT: int = int(_env("OPS_OP_TIMEOUT", "600") or 600)
+    # 开关机后状态回刷的轮询间隔（秒）；云 start/stop 为异步，需轮询至落定
+    REFRESH_POLL_INTERVAL: int = int(_env("OPS_REFRESH_POLL_INTERVAL", "60") or 60)
     MAX_WORKERS: int = int(_env("OPS_MAX_WORKERS", "8") or 8)
 
     # ---------- 目录 ----------
