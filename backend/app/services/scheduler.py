@@ -23,7 +23,8 @@ from sqlalchemy import select
 from ..core.config import settings
 from ..core.database import SessionLocal, engine
 from ..models.models import (
-    Application, OperationTask, Resource, SchedulePolicy, ScheduleLog, SystemSetting, utcnow,
+    Application, ItemStatus, OperationTask, Resource, ScheduleLog, SchedulePolicy,
+    SystemSetting, TaskItem, TaskStatus, utcnow,
 )
 
 logger = logging.getLogger("opscenter.scheduler")
@@ -113,10 +114,113 @@ def _run_auto_sync() -> None:
         results = sync_all(db)
         ok = sum(1 for r in results if r["ok"])
         logger.info("自动同步完成：%d/%d 个账号成功", ok, len(results))
+        # 同步后做开机会话对账：实例已全部停机的会话自动归档到「已关闭」
+        try:
+            n = reconcile_running_sessions(db)
+            if n:
+                logger.info("自动同步后对账：%d 个开机会话已自动归档", n)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("开机会话对账异常：%s", exc)
     except Exception as exc:  # noqa: BLE001
         logger.exception("自动同步异常：%s", exc)
     finally:
         db.close()
+
+
+def reconcile_running_sessions(db: Session) -> int:
+    """每日同步后，将「实例已全部停机」的开机会话自动归档到「已关闭」。
+
+    解决逻辑分歧：从「资源清单」直接关机只更新 Resource.status，不触碰
+    OperationTask.closed_at，导致开机会话一直停留在「运行中」。本函数在
+    sync_all 之后调用，依据各实例最新云状态做闭环。
+
+    判定规则（已与用户确认）：会话下全部目标实例均已 stopped（或云上已释放
+    deleted_on_cloud）才归档；只要任一实例仍在运行，会话保持运行中。
+    """
+    sessions = db.scalars(
+        select(OperationTask).where(
+            OperationTask.action == "start",
+            OperationTask.closed_at.is_(None),
+        )
+    ).all()
+    if not sessions:
+        return 0
+
+    moved = 0
+    now = _now()
+    for task in sessions:
+        item_ids = [i.resource_id for i in task.items if i.resource_id]
+        if not item_ids:
+            continue
+        resources = db.scalars(
+            select(Resource).where(Resource.id.in_(item_ids))
+        ).all()
+        # 证据不完整（有实例记录缺失）时保守跳过，避免误归档
+        if len(resources) != len(item_ids):
+            logger.warning("会话 #%s 部分实例记录缺失，跳过自动归档", task.id)
+            continue
+        # 全部已停机（或云上已释放）才归档
+        all_down = all(
+            (r.status or "").lower() == "stopped" or bool(r.deleted_on_cloud)
+            for r in resources
+        )
+        if not all_down:
+            continue
+        _auto_close_session(db, task, resources, now)
+        moved += 1
+
+    return moved
+
+
+def _auto_close_session(db: Session, task: OperationTask, resources: list, now) -> None:
+    """为开机会话生成一条「留痕」stop 任务（不下发云端），并归档原会话（闭环）。"""
+    from .executor import write_audit  # 延迟导入，避免循环依赖
+
+    # 1) 留痕 stop 任务：status=success，items 标记为 skipped（云上早已停机）
+    stop_task = OperationTask(
+        action="stop",
+        scope=task.scope,
+        trigger="auto",
+        operator="system(sync-reconcile)",
+        status=TaskStatus.SUCCESS.value,
+        total=len(resources),
+        succeed=len(resources),
+        failed=0,
+        skipped=0,
+        started_at=now,
+        finished_at=now,
+        created_at=now,
+        target_app_id=task.target_app_id,
+    )
+    db.add(stop_task)
+    db.flush()
+    for r in resources:
+        db.add(TaskItem(
+            task_id=stop_task.id,
+            resource_id=r.id,
+            cloud_resource_id=r.resource_id,
+            resource_name=r.resource_name,
+            resource_type=r.resource_type,
+            account_name=(r.account.name if r.account else ""),
+            status=ItemStatus.SKIPPED.value,
+            message="云上已处于关机状态，由每日同步自动归档",
+            finished_at=now,
+        ))
+
+    # 2) 归档原会话（闭环）
+    task.closed_at = now
+    task.close_task_id = stop_task.id
+
+    # 3) 审计留痕
+    names = "、".join(r.resource_name or r.resource_id for r in resources)
+    write_audit(
+        db, "system(sync-reconcile)", "stop",
+        target=f"开机会话#{task.id}（{names}）",
+        detail=(f"每日同步检测到实例已全部停机，自动归档开机会话#{task.id}"
+                f"（共 {len(resources)} 个实例）"),
+        client_ip="",
+    )
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
