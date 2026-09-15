@@ -632,7 +632,7 @@
                 loadingRunning: false, loadingAll: false,
                 filterAction: '', filterTrigger: '',
                 page: 1, pageSize: 20, total: 0,
-                itemStatusMeta,
+                taskStatusMeta, itemStatusMeta,
                 detailVisible: false, detail: {},
                 pollTimer: null,
             };
