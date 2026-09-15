@@ -36,6 +36,7 @@ def run_column_migrations(engine) -> list[str]:
         "operation_tasks": [
             ("closed_at", "ALTER TABLE operation_tasks ADD COLUMN closed_at DATETIME NULL"),
             ("close_task_id", "ALTER TABLE operation_tasks ADD COLUMN close_task_id INT NULL"),
+            ("policy_id", "ALTER TABLE operation_tasks ADD COLUMN policy_id INT NULL"),
         ],
         "cloud_accounts": [
             ("last_sync_msg", "ALTER TABLE cloud_accounts ADD COLUMN last_sync_msg TEXT NULL"),

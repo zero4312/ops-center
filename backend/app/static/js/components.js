@@ -514,12 +514,12 @@
             <div class="oc-section-title" style="display:flex;align-items:center;margin:4px 0 10px">
                 <span>执行记录（{{ allRows.length }}）</span>
                 <div class="oc-spacer"></div>
-                <el-select v-model="filterAction" size="small" style="width:110px;margin-right:8px" placeholder="动作" @change="loadAll">
+                <el-select v-model="filterAction" size="small" style="width:110px;margin-right:8px" placeholder="动作" @change="onFilterChange">
                     <el-option label="全部动作" value="" />
                     <el-option label="开机" value="start" />
                     <el-option label="节省关机" value="stop" />
                 </el-select>
-                <el-select v-model="filterTrigger" size="small" style="width:120px" placeholder="来源" @change="loadAll">
+                <el-select v-model="filterTrigger" size="small" style="width:120px" placeholder="来源" @change="onFilterChange">
                     <el-option label="全部来源" value="" />
                     <el-option label="手动" value="manual" />
                     <el-option label="定时" value="schedule" />
@@ -564,6 +564,15 @@
                     </el-table-column>
                 </el-table>
                 <el-empty v-if="!loadingAll && !allRows.length" description="暂无执行记录" :image-size="60" />
+                <el-pagination
+                    layout="total, prev, pager, next"
+                    :total="total"
+                    :page-size="pageSize"
+                    :current-page="page"
+                    @current-change="onPage"
+                    small
+                    style="margin-top:12px;justify-content:flex-end"
+                />
             </div>
 
             <!-- 详情抽屉 -->
@@ -622,6 +631,7 @@
                 runningRows: [], allRows: [],
                 loadingRunning: false, loadingAll: false,
                 filterAction: '', filterTrigger: '',
+                page: 1, pageSize: 20, total: 0,
                 itemStatusMeta,
                 detailVisible: false, detail: {},
                 pollTimer: null,
@@ -629,27 +639,31 @@
         },
         computed: {
             filteredRows() {
-                return this.allRows.filter(r =>
-                    (!this.filterAction || r.action === this.filterAction) &&
-                    (!this.filterTrigger || r.trigger === this.filterTrigger));
+                // 过滤已在后端按 action/trigger 完成，这里直接透传当前页数据
+                return this.allRows;
             }
         },
         methods: {
             fmtTime,
             loadRunning() {
                 this.loadingRunning = true;
-                api.listTasks({ action: 'start', state: 'running', limit: 100 })
+                api.listTasks({ action: 'start', state: 'running', page_size: 200 })
                     .then(r => { this.runningRows = r.items; })
-                    .catch(() => {})
+                    .catch(err => { this.$message.error('运行中会话加载失败：' + (err.message || err)); })
                     .finally(() => { this.loadingRunning = false; });
             },
             loadAll() {
                 this.loadingAll = true;
-                api.listTasks({ limit: 200 })
-                    .then(r => { this.allRows = r.items; })
-                    .catch(() => {})
+                const p = { page: this.page, page_size: this.pageSize };
+                if (this.filterAction) p.action = this.filterAction;
+                if (this.filterTrigger) p.trigger = this.filterTrigger;
+                api.listTasks(p)
+                    .then(r => { this.allRows = r.items || []; this.total = r.total || 0; })
+                    .catch(err => { this.$message.error('执行记录加载失败：' + (err.message || err)); })
                     .finally(() => { this.loadingAll = false; });
             },
+            onFilterChange() { this.page = 1; this.loadAll(); },
+            onPage(p) { this.page = p; this.loadAll(); },
             load() { this.loadRunning(); this.loadAll(); },
             openDetail(row) {
                 api.getTask(row.id).then(r => { this.detail = r; this.detailVisible = true; });
@@ -986,9 +1000,9 @@
                 this.historyPolicyName = row.name;
                 this.historyVisible = true;
                 this.historyLoading = true;
-                api.listTasks({ policy_id: row.id, limit: 200 })
+                api.listTasks({ policy_id: row.id, page_size: 200 })
                     .then(r => { this.historyRows = r.items; })
-                    .catch(() => {})
+                    .catch(err => { this.$message.error('执行历史加载失败：' + (err.message || err)); })
                     .finally(() => { this.historyLoading = false; });
             },
             openHistoryDetail(row) {

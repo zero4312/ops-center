@@ -177,21 +177,35 @@ def list_tasks(
     state: str | None = Query(None, description="running=运行中会话(开机会话未关闭) | archived=已归档会话 | 空=全部"),
     action: str | None = Query(None, description="start | stop，为空表示全部"),
     policy_id: int | None = Query(None, description="按定时策略 ID 过滤（定时任务下钻）"),
-    limit: int = Query(200, ge=1, le=1000),
+    trigger: str | None = Query(None, description="manual | schedule | auto，为空表示全部"),
+    page: int = Query(1, ge=1, description="页码，从 1 开始"),
+    page_size: int = Query(20, ge=1, le=200, description="每页行数，默认 20"),
     db: Session = Depends(get_db), _u=Depends(require_readonly),
 ):
-    """任务中心统一执行流水：所有开关机任务（手动/定时/自动、开机/关机）均在此可见。"""
+    """任务中心统一执行流水：所有开关机任务（手动/定时/自动、开机/关机）均在此可见，支持分页。"""
     stmt = select(OperationTask)
     if action:
         stmt = stmt.where(OperationTask.action == action)
     if policy_id:
         stmt = stmt.where(OperationTask.policy_id == policy_id)
+    if trigger:
+        stmt = stmt.where(OperationTask.trigger == trigger)
     if state == "running":
         stmt = stmt.where(OperationTask.closed_at.is_(None))
     elif state == "archived":
         stmt = stmt.where(OperationTask.closed_at.isnot(None))
-    rows = db.scalars(stmt.order_by(desc(OperationTask.id)).limit(limit)).all()
-    return {"items": [_task_out(db, t) for t in rows]}
+    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    rows = db.scalars(
+        stmt.order_by(desc(OperationTask.id))
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    ).all()
+    return {
+        "total": total or 0,
+        "page": page,
+        "page_size": page_size,
+        "items": [_task_out(db, t) for t in rows],
+    }
 
 
 @router.get("/running")
