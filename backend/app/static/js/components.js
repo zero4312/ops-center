@@ -510,15 +510,37 @@
                 <el-empty v-if="!loadingRunning && !runningRows.length" description="暂无运行中的开机会话" :image-size="60" />
             </div>
 
-            <!-- 归档 -->
-            <div class="oc-section-title" style="margin:4px 0 10px">已关闭 / 归档（{{ archivedRows.length }}）</div>
+            <!-- 执行记录（统一流水：手动/定时/自动、开机/关机 均在此可见） -->
+            <div class="oc-section-title" style="display:flex;align-items:center;margin:4px 0 10px">
+                <span>执行记录（{{ allRows.length }}）</span>
+                <div class="oc-spacer"></div>
+                <el-select v-model="filterAction" size="small" style="width:110px;margin-right:8px" placeholder="动作" @change="loadAll">
+                    <el-option label="全部动作" value="" />
+                    <el-option label="开机" value="start" />
+                    <el-option label="节省关机" value="stop" />
+                </el-select>
+                <el-select v-model="filterTrigger" size="small" style="width:120px" placeholder="来源" @change="loadAll">
+                    <el-option label="全部来源" value="" />
+                    <el-option label="手动" value="manual" />
+                    <el-option label="定时" value="schedule" />
+                    <el-option label="自动" value="auto" />
+                </el-select>
+                <el-button :icon="Refresh" size="small" @click="loadAll">刷新</el-button>
+            </div>
             <div class="oc-card" style="padding:8px 0">
-                <el-table :data="archivedRows" v-loading="loadingArchived" border size="small" stripe>
+                <el-table :data="filteredRows" v-loading="loadingAll" border size="small" stripe>
                     <el-table-column label="ID" prop="id" width="70" />
-                    <el-table-column label="开机时间" width="170">
+                    <el-table-column label="执行时间" width="170">
                         <template #default="{ row }">{{ fmtTime(row.started_at || row.created_at) }}</template>
                     </el-table-column>
-                    <el-table-column label="目标（实例）" min-width="220">
+                    <el-table-column label="动作" width="90">
+                        <template #default="{ row }"><el-tag size="small" :type="row.action === 'start' ? 'success' : 'danger'">{{ row.action_label }}</el-tag></template>
+                    </el-table-column>
+                    <el-table-column label="来源" width="80">
+                        <template #default="{ row }">{{ row.trigger === 'schedule' ? '定时' : row.trigger === 'auto' ? '自动' : '手动' }}</template>
+                    </el-table-column>
+                    <el-table-column label="策略" prop="policy_name" width="150" show-overflow-tooltip />
+                    <el-table-column label="目标（实例）" min-width="200">
                         <template #default="{ row }">
                             <el-tooltip v-if="(row.target_instances||[]).length > 2" :content="row.instance_names" placement="top">
                                 <span>{{ row.target_instances.slice(0,2).map(i=>i.name).join('、') }} 等{{ row.target_instances.length }}个</span>
@@ -526,20 +548,22 @@
                             <span v-else>{{ row.instance_names || '—' }}</span>
                         </template>
                     </el-table-column>
-                    <el-table-column label="关机时间" width="170">
-                        <template #default="{ row }">{{ fmtTime(row.closed_at) }}</template>
-                    </el-table-column>
                     <el-table-column label="操作人" prop="operator" width="100" />
                     <el-table-column label="状态" width="100">
-                        <template #default="{ row }"><el-tag size="small" type="info">已关闭</el-tag></template>
+                        <template #default="{ row }"><el-tag size="small" :type="(taskStatusMeta[row.status] || {}).type">{{ (taskStatusMeta[row.status] || {}).text }}</el-tag></template>
                     </el-table-column>
-                    <el-table-column label="操作" width="80" fixed="right">
+                    <el-table-column label="成功/失败/跳过" width="130">
                         <template #default="{ row }">
-                            <el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button>
+                            <span class="text-success">{{ row.succeed }}</span> /
+                            <span class="text-danger">{{ row.failed }}</span> /
+                            <span class="text-muted">{{ row.skipped }}</span>
                         </template>
                     </el-table-column>
+                    <el-table-column label="操作" width="80" fixed="right">
+                        <template #default="{ row }"><el-button link type="primary" size="small" @click="openDetail(row)">详情</el-button></template>
+                    </el-table-column>
                 </el-table>
-                <el-empty v-if="!loadingArchived && !archivedRows.length" description="暂无归档记录" :image-size="60" />
+                <el-empty v-if="!loadingAll && !allRows.length" description="暂无执行记录" :image-size="60" />
             </div>
 
             <!-- 详情抽屉 -->
@@ -595,30 +619,38 @@
         </div>`,
         data() {
             return {
-                runningRows: [], archivedRows: [],
-                loadingRunning: false, loadingArchived: false,
+                runningRows: [], allRows: [],
+                loadingRunning: false, loadingAll: false,
+                filterAction: '', filterTrigger: '',
                 itemStatusMeta,
                 detailVisible: false, detail: {},
                 pollTimer: null,
             };
         },
+        computed: {
+            filteredRows() {
+                return this.allRows.filter(r =>
+                    (!this.filterAction || r.action === this.filterAction) &&
+                    (!this.filterTrigger || r.trigger === this.filterTrigger));
+            }
+        },
         methods: {
             fmtTime,
             loadRunning() {
                 this.loadingRunning = true;
-                api.listTasks({ state: 'running', limit: 100 })
+                api.listTasks({ action: 'start', state: 'running', limit: 100 })
                     .then(r => { this.runningRows = r.items; })
                     .catch(() => {})
                     .finally(() => { this.loadingRunning = false; });
             },
-            loadArchived() {
-                this.loadingArchived = true;
-                api.listTasks({ state: 'archived', limit: 100 })
-                    .then(r => { this.archivedRows = r.items; })
+            loadAll() {
+                this.loadingAll = true;
+                api.listTasks({ limit: 200 })
+                    .then(r => { this.allRows = r.items; })
                     .catch(() => {})
-                    .finally(() => { this.loadingArchived = false; });
+                    .finally(() => { this.loadingAll = false; });
             },
-            load() { this.loadRunning(); this.loadArchived(); },
+            load() { this.loadRunning(); this.loadAll(); },
             openDetail(row) {
                 api.getTask(row.id).then(r => { this.detail = r; this.detailVisible = true; });
             },
@@ -677,6 +709,13 @@
                     <el-table-column label="下次执行" width="170">
                         <template #default="{ row }">{{ fmtTime(row.next_run_at) }}</template>
                     </el-table-column>
+                    <el-table-column label="终止期限" width="180">
+                        <template #default="{ row }">
+                            <span v-if="row.end_date">{{ fmtTime(row.end_date) }}</span>
+                            <span v-else class="text-muted">长期有效</span>
+                            <div v-if="row.end_date && isExpired(row.end_date)" style="font-size:12px;margin-top:2px"><el-tag size="small" type="info">已过期·已停用</el-tag></div>
+                        </template>
+                    </el-table-column>
                     <el-table-column label="上次执行" width="170">
                         <template #default="{ row }">
                             <div>{{ fmtTime(row.last_run_at) }}</div>
@@ -691,9 +730,10 @@
                                        @change="v => toggle(row, v)" />
                         </template>
                     </el-table-column>
-                    <el-table-column label="操作" width="220" fixed="right">
+                    <el-table-column label="操作" width="280" fixed="right">
                         <template #default="{ row }">
                             <el-button link type="primary" size="small" @click="runNow(row)">立即执行</el-button>
+                            <el-button link type="primary" size="small" @click="openHistory(row)">执行历史</el-button>
                             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
                             <el-button link type="danger" size="small" @click="remove(row)">删除</el-button>
                         </template>
@@ -749,11 +789,33 @@
                             <el-option v-for="r in resourceOptions" :key="r.id" :label="r.resource_name" :value="r.id" />
                         </el-select>
                     </el-form-item>
-                    <el-form-item label="cron 表达式">
+                    <el-form-item label="cron 模式">
+                        <el-radio-group v-model="form.cronMode">
+                            <el-radio-button value="simple">下拉选择</el-radio-button>
+                            <el-radio-button value="advanced">高级表达式</el-radio-button>
+                        </el-radio-group>
+                    </el-form-item>
+                    <el-form-item label="执行时间" v-if="form.cronMode === 'simple'">
+                        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                            <span class="text-muted">分</span><el-select v-model="form.cronMin" style="width:86px"><el-option v-for="o in minuteOptions" :key="o.v" :label="o.l" :value="o.v" /></el-select>
+                            <span class="text-muted">时</span><el-select v-model="form.cronHour" style="width:86px"><el-option v-for="o in hourOptions" :key="o.v" :label="o.l" :value="o.v" /></el-select>
+                            <span class="text-muted">日</span><el-select v-model="form.cronDay" style="width:86px"><el-option v-for="o in dayOptions" :key="o.v" :label="o.l" :value="o.v" /></el-select>
+                            <span class="text-muted">月</span><el-select v-model="form.cronMonth" style="width:86px"><el-option v-for="o in monthOptions" :key="o.v" :label="o.l" :value="o.v" /></el-select>
+                            <span class="text-muted">周</span><el-select v-model="form.cronDow" style="width:120px"><el-option v-for="o in dowOptions" :key="o.v" :label="o.l" :value="o.v" /></el-select>
+                        </div>
+                        <div class="text-muted" style="font-size:12px;margin-top:4px">当前表达式：<span class="mono">{{ buildCron() }}</span>（{{ fmtCron(buildCron()) }}）</div>
+                    </el-form-item>
+                    <el-form-item label="cron 表达式" v-else>
                         <el-input v-model="form.cron_expr" placeholder="0 9 * * 1-5">
                             <template #append>Asia/Shanghai</template>
                         </el-input>
                         <div class="text-muted" style="font-size:12px;margin-top:4px">当前解析：{{ fmtCron(form.cron_expr) }}</div>
+                    </el-form-item>
+                    <el-form-item label="终止期限">
+                        <el-date-picker v-model="form.end_date" type="datetime"
+                            value-format="YYYY-MM-DD HH:mm:ss" format="YYYY-MM-DD HH:mm:ss"
+                            placeholder="留空 = 长期有效" :clearable="true" style="width:100%" />
+                        <div class="text-muted" style="font-size:12px;margin-top:4px">到期后将自动停用该策略；留空表示长期有效</div>
                     </el-form-item>
                     <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
                 </el-form>
@@ -762,18 +824,95 @@
                     <el-button type="primary" @click="save">保存</el-button>
                 </template>
             </el-dialog>
+
+            <el-dialog v-model="historyVisible" :title="'执行历史 · ' + historyPolicyName" width="860px">
+                <el-table :data="historyRows" v-loading="historyLoading" border size="small" stripe>
+                    <el-table-column label="任务ID" prop="id" width="80" />
+                    <el-table-column label="执行时间" width="170">
+                        <template #default="{ row }">{{ fmtTime(row.started_at || row.created_at) }}</template>
+                    </el-table-column>
+                    <el-table-column label="动作" width="90">
+                        <template #default="{ row }"><el-tag size="small" :type="row.action === 'start' ? 'success' : 'danger'">{{ row.action_label }}</el-tag></template>
+                    </el-table-column>
+                    <el-table-column label="来源" width="80">
+                        <template #default="{ row }">{{ row.trigger === 'schedule' ? '定时' : row.trigger === 'auto' ? '自动' : '手动' }}</template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="100">
+                        <template #default="{ row }"><el-tag size="small" :type="(taskStatusMeta[row.status] || {}).type">{{ (taskStatusMeta[row.status] || {}).text }}</el-tag></template>
+                    </el-table-column>
+                    <el-table-column label="成功/失败/跳过" width="130">
+                        <template #default="{ row }"><span class="text-success">{{ row.succeed }}</span> / <span class="text-danger">{{ row.failed }}</span> / <span class="text-muted">{{ row.skipped }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="80">
+                        <template #default="{ row }"><el-button link type="primary" size="small" @click="openHistoryDetail(row)">详情</el-button></template>
+                    </el-table-column>
+                </el-table>
+                <el-empty v-if="!historyLoading && !historyRows.length" description="该策略暂无执行记录" :image-size="60" />
+            </el-dialog>
+
+            <el-drawer v-model="historyDetailVisible" :title="'任务 #' + (historyDetail.id || '') + ' 明细'" size="60%">
+                <div v-if="historyDetail.id">
+                    <el-descriptions :column="3" border size="small" style="margin-bottom:16px">
+                        <el-descriptions-item label="状态"><el-tag size="small" :type="(taskStatusMeta[historyDetail.status] || {}).type">{{ (taskStatusMeta[historyDetail.status] || {}).text }}</el-tag></el-descriptions-item>
+                        <el-descriptions-item label="动作">{{ historyDetail.action_label }}</el-descriptions-item>
+                        <el-descriptions-item label="来源">{{ historyDetail.trigger === 'schedule' ? '定时' : historyDetail.trigger === 'auto' ? '自动' : '手动' }}</el-descriptions-item>
+                        <el-descriptions-item label="操作人">{{ historyDetail.operator }}</el-descriptions-item>
+                        <el-descriptions-item label="执行时间">{{ fmtTime(historyDetail.started_at || historyDetail.created_at) }}</el-descriptions-item>
+                        <el-descriptions-item label="结果（成/败/跳）">{{ historyDetail.succeed }}/{{ historyDetail.failed }}/{{ historyDetail.skipped }}</el-descriptions-item>
+                    </el-descriptions>
+                    <el-table :data="historyDetail.items || []" border size="small" stripe>
+                        <el-table-column label="资源" prop="resource_name" min-width="180" show-overflow-tooltip />
+                        <el-table-column label="类型" prop="resource_type" width="70" />
+                        <el-table-column label="账号" prop="account_name" width="120" show-overflow-tooltip />
+                        <el-table-column label="状态" width="90">
+                            <template #default="{ row }"><el-tag size="small" :type="(itemStatusMeta[row.status] || {}).type">{{ (itemStatusMeta[row.status] || {}).text }}</el-tag></template>
+                        </el-table-column>
+                        <el-table-column label="结果" prop="message" min-width="220" show-overflow-tooltip />
+                    </el-table>
+                </div>
+            </el-drawer>
         </div>`,
         data() {
             return {
                 rows: [], logs: [], apps: [], resourceOptions: [], loading: false,
-                taskStatusMeta, dialog: false,
-                form: this.blankForm()
+                taskStatusMeta, itemStatusMeta, dialog: false,
+                historyVisible: false, historyRows: [], historyLoading: false, historyPolicyName: '',
+                historyDetailVisible: false, historyDetail: {},
+                form: this.blankForm(),
+                minuteOptions: [{ v: '*', l: '每分' }].concat(
+                    Array.from({ length: 60 }, (_, i) => { const s = String(i).padStart(2, '0'); return { v: s, l: s }; })),
+                hourOptions: [{ v: '*', l: '每时' }].concat(
+                    Array.from({ length: 24 }, (_, i) => { const s = String(i).padStart(2, '0'); return { v: s, l: s }; })),
+                dayOptions: [{ v: '*', l: '每天' }].concat(
+                    Array.from({ length: 31 }, (_, i) => { const s = String(i + 1); return { v: s, l: s }; })),
+                monthOptions: [{ v: '*', l: '每月' }].concat(
+                    Array.from({ length: 12 }, (_, i) => { const s = String(i + 1); return { v: s, l: s }; })),
+                dowOptions: [
+                    { v: '*', l: '每天' },
+                    { v: '1-5', l: '工作日(周一~周五)' },
+                    { v: '1', l: '周一' }, { v: '2', l: '周二' }, { v: '3', l: '周三' },
+                    { v: '4', l: '周四' }, { v: '5', l: '周五' }, { v: '6', l: '周六' }, { v: '0', l: '周日' },
+                ],
             };
         },
         methods: {
             fmtTime, fmtCron,
+            buildCron() {
+                return `${this.form.cronMin} ${this.form.cronHour} ${this.form.cronDay} ${this.form.cronMonth} ${this.form.cronDow}`;
+            },
+            isExpired(endDate) {
+                const d = new Date(String(endDate).replace(' ', 'T'));
+                return !!d && d < new Date();
+            },
             blankForm() {
-                return { id: null, name: '', action: 'start', scope: 'app', target_app_id: null, target_resource_ids: [], cron_expr: '0 9 * * *', remark: '' };
+                return {
+                    id: null, name: '', action: 'start', scope: 'app',
+                    target_app_id: null, target_resource_ids: [],
+                    cronMode: 'simple',
+                    cronMin: '0', cronHour: '9', cronDay: '*', cronMonth: '*', cronDow: '*',
+                    cron_expr: '0 9 * * *',
+                    end_date: null, remark: ''
+                };
             },
             load() {
                 this.loading = true;
@@ -789,17 +928,28 @@
                 this.dialog = true;
             },
             openEdit(row) {
+                const segs = (row.cron_expr || '* * * * *').trim().split(/\s+/);
+                const isSimple = segs.length === 5 && segs.every(s => /^(\*|\d+|\d+-\d+)$/.test(s));
                 this.form = {
                     id: row.id, name: row.name, action: row.action, scope: row.scope,
                     target_app_id: row.target_app_id, target_resource_ids: row.target_resource_ids || [],
-                    cron_expr: row.cron_expr, remark: row.remark
+                    cronMode: isSimple ? 'simple' : 'advanced',
+                    cronMin: segs[0] || '*', cronHour: segs[1] || '*',
+                    cronDay: segs[2] || '*', cronMonth: segs[3] || '*', cronDow: segs[4] || '*',
+                    cron_expr: row.cron_expr,
+                    end_date: row.end_date ? String(row.end_date).replace('T', ' ').slice(0, 19) : null,
+                    remark: row.remark
                 };
                 this.dialog = true;
             },
             save() {
+                const cron = this.form.cronMode === 'simple'
+                    ? `${this.form.cronMin} ${this.form.cronHour} ${this.form.cronDay} ${this.form.cronMonth} ${this.form.cronDow}`
+                    : (this.form.cron_expr || '').trim();
                 const payload = {
                     name: this.form.name, action: this.form.action, scope: this.form.scope,
-                    cron_expr: this.form.cron_expr, remark: this.form.remark
+                    cron_expr: cron, remark: this.form.remark,
+                    end_date: this.form.end_date || null
                 };
                 if (this.form.scope === 'app') payload.target_app_id = this.form.target_app_id;
                 else payload.target_resource_ids = this.form.target_resource_ids;
@@ -831,6 +981,18 @@
                     this.$message.success('已删除');
                     this.load();
                 }).catch(() => {});
+            },
+            openHistory(row) {
+                this.historyPolicyName = row.name;
+                this.historyVisible = true;
+                this.historyLoading = true;
+                api.listTasks({ policy_id: row.id, limit: 200 })
+                    .then(r => { this.historyRows = r.items; })
+                    .catch(() => {})
+                    .finally(() => { this.historyLoading = false; });
+            },
+            openHistoryDetail(row) {
+                api.getTask(row.id).then(r => { this.historyDetail = r; this.historyDetailVisible = true; });
             }
         },
         mounted() {

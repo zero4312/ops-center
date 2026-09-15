@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..models.models import (
-    Application, ItemStatus, OperationTask, Resource, TaskItem, TaskStatus,
+    Application, ItemStatus, OperationTask, Resource, SchedulePolicy, TaskItem, TaskStatus,
 )
 from ..services.executor import _now, create_task, write_audit
 from .deps import client_ip, require_operator, require_readonly
@@ -106,6 +106,7 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "type": i.resource_type,
         "account": i.account_name,
     } for i in items]
+    policy_obj = db.get(SchedulePolicy, task.policy_id) if task.policy_id else None
     data = {
         "id": task.id,
         "action": task.action,
@@ -126,6 +127,7 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "closed_at": task.closed_at,
         "close_task_id": task.close_task_id,
         "policy_id": task.policy_id,
+        "policy_name": policy_obj.name if policy_obj else "",
         "target_instances": target_instances,
         "instance_names": ", ".join(i["name"] for i in target_instances),
     }
@@ -172,12 +174,18 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
 
 @router.get("")
 def list_tasks(
-    state: str | None = Query(None, description="running=运行中会话 | archived=已归档会话 | 空=全部"),
-    limit: int = Query(100, ge=1, le=500),
+    state: str | None = Query(None, description="running=运行中会话(开机会话未关闭) | archived=已归档会话 | 空=全部"),
+    action: str | None = Query(None, description="start | stop，为空表示全部"),
+    policy_id: int | None = Query(None, description="按定时策略 ID 过滤（定时任务下钻）"),
+    limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_db), _u=Depends(require_readonly),
 ):
-    """任务中心：只展示开机任务（action=start），按 state 拆分运行中/归档。"""
-    stmt = select(OperationTask).where(OperationTask.action == "start")
+    """任务中心统一执行流水：所有开关机任务（手动/定时/自动、开机/关机）均在此可见。"""
+    stmt = select(OperationTask)
+    if action:
+        stmt = stmt.where(OperationTask.action == action)
+    if policy_id:
+        stmt = stmt.where(OperationTask.policy_id == policy_id)
     if state == "running":
         stmt = stmt.where(OperationTask.closed_at.is_(None))
     elif state == "archived":
