@@ -78,46 +78,30 @@
                 </el-col>
             </el-row>
 
-            <div class="oc-card" style="padding:14px 16px">
+            <div style="margin-top:16px">
                 <h3 style="margin:0 0 12px;font-size:15px">
-                    运行中资源
-                    <el-tag size="small" type="success" style="margin-left:8px">{{ runningRows.length }}</el-tag>
+                    按应用
+                    <span class="text-muted" style="font-size:12px;font-weight:normal;margin-left:8px">共 {{ Object.keys(appStats).length }} 个应用</span>
                 </h3>
-                <el-table :data="runningRows" v-loading="runningLoading" border size="small" stripe
-                          max-height="420" empty-text="当前没有运行中的资源">
-                    <el-table-column label="云账号" prop="account_name" min-width="150" show-overflow-tooltip />
-                    <el-table-column label="实例名称" min-width="240" show-overflow-tooltip>
-                        <template #default="{ row }">{{ row.resource_name || row.resource_id }}</template>
-                    </el-table-column>
-                    <el-table-column label="运行中" width="100">
-                        <template #default>
-                            <span><span class="dot dot-running"></span>运行中</span>
-                        </template>
-                    </el-table-column>
-                </el-table>
-            </div>
-
-            <el-row :gutter="14" style="margin-top:4px">
-                <el-col :span="24">
-                    <div class="oc-card">
-                        <h3 style="margin:0 0 12px;font-size:15px">按资源类型</h3>
-                        <div v-for="(v, k) in summary.by_type" :key="k" style="margin-bottom:10px">
-                            <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-                                <span>{{ k }}</span>
-                                <span class="text-muted">运行 {{ v.running }} / 停止 {{ v.stopped }} / 共 {{ v.total }}</span>
-                            </div>
-                            <el-progress :percentage="pct(v.running, v.total)" :stroke-width="14"
-                                         :color="v.total ? '#2563eb' : '#e5e7eb'" />
+                <div v-loading="loadingApps" style="display:flex;flex-wrap:wrap;gap:10px">
+                    <div v-for="(v, name) in appStats" :key="name" class="app-block"
+                         style="flex:0 0 calc(12.5% - 9px);min-width:120px">
+                        <div class="app-name" :title="name">{{ name }}</div>
+                        <div class="app-sub">
+                            <span class="text-muted">共 {{ v.total }} · </span>
+                            <span class="text-success">运行 {{ v.running }}</span>
+                            <span class="text-muted"> · </span>
+                            <span class="text-danger">停止 {{ v.stopped }}</span>
                         </div>
-                        <el-empty v-if="!Object.keys(summary.by_type || {}).length" description="暂无资源" :image-size="60" />
                     </div>
-                </el-col>
-            </el-row>
+                </div>
+                <el-empty v-if="!loadingApps && !Object.keys(appStats).length" description="暂无资源" :image-size="60" />
+            </div>
         </div>`,
         data() {
             return {
                 summary: { by_type: {}, stop_saving_count: 0, total: 0 },
-                runningRows: [], runningLoading: false
+                appStats: {}, loadingApps: false
             };
         },
         computed: {
@@ -131,10 +115,27 @@
             },
             load() {
                 api.summary({ app_id: this.appId }).then(r => { this.summary = r; });
-                this.runningLoading = true;
-                api.listResources({ app_id: this.appId, power_state: 'running', page: 1, page_size: 500 })
-                    .then(r => { this.runningRows = r.items; })
-                    .finally(() => { this.runningLoading = false; });
+                this.loadAppStats();
+            },
+            loadAppStats() {
+                this.loadingApps = true;
+                const map = {};
+                const push = (items) => items.forEach(it => {
+                    const name = it.app_name || '未分类';
+                    if (!map[name]) map[name] = { total: 0, running: 0, stopped: 0 };
+                    map[name].total += 1;
+                    if (it.power_state === 'running') map[name].running += 1;
+                    else if (it.power_state === 'stopped') map[name].stopped += 1;
+                });
+                const collect = (page, acc) => api.listResources({
+                    app_id: this.appId, page, page_size: 500
+                }).then(r => {
+                    acc.push(...r.items);
+                    if (r.items.length < r.page_size || page * r.page_size >= r.total || page >= 20) return acc;
+                    return collect(page + 1, acc);
+                });
+                collect(1, []).then(items => { push(items); this.appStats = map; })
+                    .finally(() => { this.loadingApps = false; });
             }
         },
         watch: {
