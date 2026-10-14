@@ -7,9 +7,10 @@
 
     // view key（小写，用于 URL）→ 组件名（components.js 导出，首字母大写）
     const VIEW_COMPONENT = {
-        overview: 'Overview', resources: 'Resources',
+        overview: 'Overview', resources: 'Resources', released: 'ReleasedResources',
         tasks: 'Operations', schedules: 'Schedules',
-        accounts: 'Accounts', users: 'Users', audit: 'Audit', settings: 'SystemSettings'
+        accounts: 'Accounts', users: 'Users', audit: 'Audit', settings: 'SystemSettings',
+        appmgr: 'AppManager'
     };
 
     const ROLE_LABELS = { admin: '管理员', operator: '运维', readonly: '只读' };
@@ -41,7 +42,8 @@
                     title: '资源视图',
                     items: [
                         { key: 'overview', label: '概览', icon: 'Odometer' },
-                        { key: 'resources', label: '资源清单', icon: 'Grid' }
+                        { key: 'resources', label: '资源清单', icon: 'Grid' },
+                        { key: 'released', label: '已释放资源', icon: 'Delete' }
                     ]
                 },
                 {
@@ -57,7 +59,8 @@
                             { key: 'settings', label: '系统设置', icon: 'Setting' },
                             { key: 'accounts', label: '云账号', icon: 'Link' },
                             { key: 'users', label: '用户与权限', icon: 'User' },
-                            { key: 'audit', label: '审计日志', icon: 'Document' }
+                            { key: 'audit', label: '审计日志', icon: 'Document' },
+                            { key: 'appmgr', label: '应用管理', icon: 'Collection' }
                         ]
                     }
             ];
@@ -101,7 +104,8 @@
             }
 
             function loadApps() {
-                api.listApps().then(r => { apps.value = r.items; });
+                // 仅保留启用中的应用，停用的不进入资源筛选下拉 / 关联应用选择
+                api.listApps().then(r => { apps.value = r.items.filter(a => a.enabled); });
             }
 
             function loadEnvs() {
@@ -118,9 +122,10 @@
 
             // 视图 key -> URL 路径映射（SPA 前端路由，服务端已做回退到 index.html）
             const PATH_MAP = {
-                overview: 'overview', resources: 'resources',
+                overview: 'overview', resources: 'resources', released: 'released',
                 tasks: 'tasks', schedules: 'schedules',
-                accounts: 'accounts', users: 'users', audit: 'audit', settings: 'settings'
+                accounts: 'accounts', users: 'users', audit: 'audit', settings: 'settings',
+                appmgr: 'appmgr'
             };
             function resolveViewFromPath() {
                 const seg = (window.location.pathname.split('/').filter(Boolean).pop() || '').toLowerCase();

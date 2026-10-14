@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from ..core.database import get_db
@@ -118,21 +118,32 @@ def update_app(app_id: int, body: AppUpdate, request: Request,
 @router.delete("/{app_id}")
 def delete_app(app_id: int, request: Request,
                db: Session = Depends(get_db), user=Depends(require_operator)):
+    """软删除（停用）应用：置 enabled=False，其资源回退到按实例名自动解析的归属，
+    可从「应用管理」重新启用。不做物理删除，保留历史可追溯。"""
     app = db.get(Application, app_id)
     if app is None:
         raise HTTPException(404, "应用不存在")
+    if not app.enabled:
+        raise HTTPException(400, "该应用已处于停用状态")
 
-    # 解绑引用，避免外键约束
+    # 资源归属回退：清除手工绑定；effective 恢复为自动解析应用，
+    # 若自动解析恰好指向本应用（同名解析）则置空 → 归入「未分类」，避免仍挂在停用应用下。
     db.execute(
         Resource.__table__.update()
         .where(Resource.effective_app_id == app_id)
-        .values(effective_app_id=None, manual_app_id=None, auto_app_id=None)
+        .values(
+            manual_app_id=None,
+            effective_app_id=case(
+                (Resource.auto_app_id != app_id, Resource.auto_app_id),
+                else_=None,
+            ),
+        )
     )
     name = app.name
-    db.delete(app)
+    app.enabled = False
     db.commit()
-    write_audit(db, user.username, "delete_app", name, "", client_ip(request))
-    return {"message": f"已删除应用 {name}"}
+    write_audit(db, user.username, "disable_app", name, "停用应用（软删除），资源回退到自动解析归属", client_ip(request))
+    return {"message": f"已停用应用 {name}（其资源已回退到按实例名自动解析的归属）"}
 
 
 @router.post("/{app_id}/bind")

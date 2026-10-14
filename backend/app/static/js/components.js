@@ -1439,6 +1439,11 @@
                         </template>
                     </el-table-column>
                     <el-table-column label="云账号" prop="account_name" width="150" show-overflow-tooltip />
+                    <el-table-column label="状态" width="100">
+                        <template #default="{ row }">
+                            <el-tag size="small" type="warning">下线归档</el-tag>
+                        </template>
+                    </el-table-column>
                     <el-table-column label="应用" prop="app_name" width="140" show-overflow-tooltip />
                     <el-table-column label="实例ID" prop="resource_id" min-width="160" show-overflow-tooltip />
                     <el-table-column label="释放时间" width="170">
@@ -1486,5 +1491,106 @@
         mounted() { this.load(); }
     };
 
-    global.OCComponents = { Overview, Resources, ReleasedResources, Operations, Schedules, Accounts, Users, Audit, SystemSettings };
+    // ======================================================================
+    // 应用管理（手动维护应用列表：停用/启用/新建）
+    // ======================================================================
+    const AppManager = {
+        props: ['me'],
+        template: `
+        <div>
+            <h2 class="page-title">应用管理</h2>
+            <el-alert type="info" :closable="false" show-icon style="margin-bottom:12px"
+                      title="停用（软删除）的应用不计入概览与资源筛选，其资源回退到按实例名自动解析的归属；可在本页重新启用。" />
+            <div class="oc-toolbar">
+                <el-button type="primary" @click="openCreate">新建应用</el-button>
+                <div class="oc-spacer"></div>
+                <span class="text-muted">共 {{ rows.length }} 个应用（含已停用）</span>
+            </div>
+            <div class="oc-card" style="padding:8px 0">
+                <el-table :data="rows" v-loading="loading" border size="small" stripe>
+                    <el-table-column label="应用名称" prop="name" min-width="170" show-overflow-tooltip />
+                    <el-table-column label="编码" prop="code" width="140" show-overflow-tooltip />
+                    <el-table-column label="负责人" prop="owner" width="110" />
+                    <el-table-column label="资源数" width="90" align="center">
+                        <template #default="{ row }">{{ row.stats.total }}</template>
+                    </el-table-column>
+                    <el-table-column label="运行中" width="80" align="center">
+                        <template #default="{ row }"><span class="text-success">{{ row.stats.running }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="已停止" width="80" align="center">
+                        <template #default="{ row }"><span class="text-danger">{{ row.stats.stopped }}</span></template>
+                    </el-table-column>
+                    <el-table-column label="状态" width="100">
+                        <template #default="{ row }">
+                            <el-tag size="small" :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '已停用' }}</el-tag>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="160" fixed="right">
+                        <template #default="{ row }">
+                            <el-button v-if="row.enabled" link type="danger" size="small" @click="disable(row)">停用</el-button>
+                            <el-button v-else link type="success" size="small" @click="enable(row)">启用</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </div>
+
+            <el-dialog v-model="createDialog" title="新建应用" width="460px">
+                <el-form label-width="80px">
+                    <el-form-item label="应用名称" required>
+                        <el-input v-model="form.name" maxlength="128" placeholder="如 APC-DEMO" />
+                    </el-form-item>
+                    <el-form-item label="编码" required>
+                        <el-input v-model="form.code" maxlength="128" placeholder="唯一，如 DEMO" />
+                    </el-form-item>
+                    <el-form-item label="负责人">
+                        <el-input v-model="form.owner" maxlength="64" />
+                    </el-form-item>
+                </el-form>
+                <template #footer>
+                    <el-button @click="createDialog = false">取消</el-button>
+                    <el-button type="primary" :loading="saving" @click="create">确定</el-button>
+                </template>
+            </el-dialog>
+        </div>`,
+        data() {
+            return {
+                rows: [], loading: false,
+                createDialog: false, saving: false,
+                form: { name: '', code: '', owner: '' }
+            };
+        },
+        methods: {
+            load() {
+                this.loading = true;
+                api.listApps().then(r => { this.rows = r.items; })
+                    .finally(() => { this.loading = false; });
+            },
+            disable(row) {
+                this.$confirm(
+                    `确认停用应用「${row.name}」？其下资源将回退到按实例名自动解析的归属，不再计入概览。`,
+                    '停用应用', { type: 'warning' }
+                ).then(() => api.deleteApp(row.id))
+                 .then(() => { this.$message.success('已停用'); this.load(); })
+                 .catch(() => {});
+            },
+            enable(row) {
+                api.updateApp(row.id, { enabled: true })
+                    .then(() => { this.$message.success('已启用'); this.load(); });
+            },
+            openCreate() { this.form = { name: '', code: '', owner: '' }; this.createDialog = true; },
+            create() {
+                if (!this.form.name || !this.form.code) {
+                    this.$message.warning('应用名称和编码必填');
+                    return;
+                }
+                this.saving = true;
+                api.createApp({ name: this.form.name, code: this.form.code, owner: this.form.owner, enabled: true })
+                    .then(() => { this.$message.success('已创建应用'); this.createDialog = false; this.load(); })
+                    .finally(() => { this.saving = false; });
+            }
+        },
+        mounted() { this.load(); }
+    };
+
+    global.OCComponents = { Overview, Resources, ReleasedResources, Operations, Schedules, Accounts, Users, Audit, SystemSettings, AppManager };
 })(window);
