@@ -108,6 +108,25 @@ def list_resources(
             Resource.private_ip.like(kw),
         ))
 
+    # power_state 是 Resource.status 的计算属性（running/stopped/other），非数据库列。
+    # 必须下推到 SQL 层过滤，否则只会在已分页的本页数据上过滤，无法覆盖全部实例。
+    if power_state:
+        ps = power_state.lower()
+        running_set = ("running", "starting", "pending")
+        stopped_set = ("stopped", "stopping", "shutdown")
+        low_status = func.lower(Resource.status)
+        if ps == "running":
+            stmt = stmt.where(low_status.in_(running_set))
+        elif ps == "stopped":
+            stmt = stmt.where(low_status.in_(stopped_set))
+        elif ps == "other":
+            # 未归一进 running/stopped 的（含空值、unknown、error 等）均视为 other
+            stmt = stmt.where(or_(
+                low_status.notin_(running_set + stopped_set),
+                Resource.status.is_(None),
+                Resource.status == "",
+            ))
+
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
         stmt.order_by(Resource.resource_type, Resource.resource_name)
@@ -115,8 +134,6 @@ def list_resources(
     ).all()
 
     items = [_resource_out(r) for r in rows]
-    if power_state:
-        items = [i for i in items if i["power_state"] == power_state]
 
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
