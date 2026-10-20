@@ -106,6 +106,20 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "type": i.resource_type,
         "account": i.account_name,
     } for i in items]
+    # 成功/失败/跳过：以明细实际状态实时统计为准。
+    # 历史任务曾因事务快照问题未回写 task.succeed/failed/skipped，直接读列会显示 0。
+    succeed = sum(1 for i in items if i.status == ItemStatus.SUCCESS.value)
+    failed = sum(1 for i in items if i.status == ItemStatus.FAILED.value)
+    skipped = sum(1 for i in items if i.status == ItemStatus.SKIPPED.value)
+    # 终态任务：按明细统计重新判定状态，避免历史任务被误判（如明细失败但存储状态是 success）
+    status = task.status
+    if status in (TaskStatus.SUCCESS.value, TaskStatus.PARTIAL.value, TaskStatus.FAILED.value):
+        status = (
+            TaskStatus.SUCCESS.value if failed == 0 and succeed > 0
+            else TaskStatus.PARTIAL.value if succeed > 0
+            else TaskStatus.SUCCESS.value if failed == 0
+            else TaskStatus.FAILED.value
+        )
     policy_obj = db.get(SchedulePolicy, task.policy_id) if task.policy_id else None
     data = {
         "id": task.id,
@@ -114,13 +128,13 @@ def _task_out(db: Session, task: OperationTask, with_items: bool = False) -> dic
         "scope": task.scope,
         "trigger": task.trigger,
         "operator": task.operator,
-        "status": task.status,
+        "status": status,
         # 会话状态：运行中 / 已关闭（开机会话闭环）
         "session_status": "running" if task.closed_at is None else "closed",
         "total": task.total,
-        "succeed": task.succeed,
-        "failed": task.failed,
-        "skipped": task.skipped,
+        "succeed": succeed,
+        "failed": failed,
+        "skipped": skipped,
         "started_at": task.started_at,
         "finished_at": task.finished_at,
         "created_at": task.created_at,

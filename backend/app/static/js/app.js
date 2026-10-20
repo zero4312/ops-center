@@ -49,7 +49,7 @@
                 {
                     title: '运维操作',
                     items: [
-                        { key: 'tasks', label: '任务中心', icon: 'List' },
+                        { key: 'tasks', label: '执行记录', icon: 'List' },
                         { key: 'schedules', label: '定时开关机', icon: 'Timer' }
                     ]
                 },

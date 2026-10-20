@@ -93,6 +93,10 @@
 
         /* 任务详情 */
         .item-msg { font-size: 12px; color: #606266; word-break: break-all; }
+
+        /* 执行记录：目标实例单元格高度自适应，实例名完整换行展示 */
+        .task-cell-wrap .el-table .cell { white-space: normal !important; word-break: break-word; line-height: 1.6; }
+        .task-cell-wrap .el-table td.el-table__cell { vertical-align: top; }
     </style>
 </head>
 <body>
@@ -209,7 +213,7 @@
 <script src="/static/vendor/element-plus-zh-cn.js"></script>
 <script src="/static/vendor/axios.min.js"></script>
 <script src="/static/js/api.js?v=20260907"></script>
-<script src="/static/js/components.js?v=20261014d"></script>
-<script src="/static/js/app.js?v=20261014a"></script>
+<script src="/static/js/components.js?v=20261020a"></script>
+<script src="/static/js/app.js?v=20261020a"></script>
 </body>
 </html>

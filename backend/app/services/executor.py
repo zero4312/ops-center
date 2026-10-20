@@ -145,7 +145,11 @@ def _run_task(task_id: int, ordered: bool = True) -> None:
                     pass
 
         # 汇总
-        db.expire_all()
+        # 必须先提交以结束当前事务：MySQL 默认 REPEATABLE READ，若不提交，下面的重查
+        # 会沿用本事务首次读建立的快照，读不到 _run_item（独立会话）已提交的明细状态，
+        # 导致 succeed/failed/skipped 全部统计为 0（进而把状态误判为 success）。
+        db.commit()
+        task = db.get(OperationTask, task_id)
         items = db.scalars(select(TaskItem).where(TaskItem.task_id == task_id)).all()
         succeed = sum(1 for i in items if i.status == ItemStatus.SUCCESS.value)
         failed = sum(1 for i in items if i.status == ItemStatus.FAILED.value)
